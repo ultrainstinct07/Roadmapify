@@ -1,0 +1,7 @@
+# >>> roadmapify >>>
+# Append-only logs with content-hashed ids: git's built-in union driver
+# merges two branches' records without a conflict and without needing a
+# custom driver installed. This works in a fresh clone.
+roadmap-out/journal.jsonl  merge=union
+roadmap-out/evidence.jsonl merge=union
+# <<< roadmapify <<<

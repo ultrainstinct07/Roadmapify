@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "roadmapify"
+version = "0.1.0"
+description = "Turn a one-line goal into a git-synced phase plan with durable decision memory that survives context loss"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["claude", "claude-code", "roadmap", "planning", "agent-memory", "git", "knowledge-graph"]
+requires-python = ">=3.10"
+
+# ONE conditional dependency, on purpose. tomllib is stdlib from 3.11; the DAG
+# work is stdlib graphlib; name matching is pure-Python token Jaccard. graphify
+# declares 30 required deps (25 of them tree-sitter grammars) because it parses
+# source code — roadmapify parses one TOML file and some git output, so anything
+# more than this line has to justify itself.
+dependencies = [
+    "tomli>=2.0.1; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+# Reserved for T-22 (P-8), which serves the read tools over STDIO. Nothing in
+# the package imports either of these yet, and there is no console script for
+# them until serve.py exists — an entry point for a missing module installs a
+# binary that tracebacks. starlette is floored above the CVE-2026-48818 /
+# CVE-2026-54283 fixes, matching graphify's pin; it is here because an HTTP
+# transport is the likely second one, not because stdio needs it.
+mcp = ["mcp>=1,<3", "starlette>=1.3.1,<2"]
+llm = ["anthropic"]
+all = ["mcp>=1,<3", "starlette>=1.3.1,<2", "anthropic"]
+
+[project.scripts]
+roadmap = "roadmapify.__main__:main"
+# Short alias: `roadmap` is a common enough word that a PATH collision is
+# conceivable, and `rmap next` is faster to type in a loop. One line to hedge it.
+rmap = "roadmapify.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[tool.setuptools]
+packages = ["roadmapify"]
+include-package-data = false
+
+[tool.setuptools.package-data]
+# skill.md and references/*.md arrive with T-20 (P-7). A glob that matches
+# nothing is silently dropped from the wheel, so declaring them early looks like
+# shipped package data and is not.
+roadmapify = ["always_on/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.pyright]
+include = ["roadmapify", "tests"]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"

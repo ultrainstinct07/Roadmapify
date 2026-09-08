@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+.venv/
+
+# >>> roadmapify >>>
+# Derived and disposable. The two append-only logs below are the durable
+# memory and ARE tracked — they carry decisions and observed git facts.
+roadmap-out/*
+!roadmap-out/journal.jsonl
+!roadmap-out/evidence.jsonl
+# <<< roadmapify <<<
