@@ -13,19 +13,28 @@ sources, and the derived layer is disposable:
 ```
 roadmap.toml              SOURCE   the plan            tracked, hand-edited
 roadmap-out/journal.jsonl SOURCE   the memory          tracked, append-only, merge=union
-roadmap-out/evidence.jsonl SOURCE  observed git facts  tracked, append-only, merge=union
+roadmap-out/evidence.jsonl SOURCE  observed git facts  tracked — WRITTEN IN P-3
         │
-        └── project() ──► graph.json ──► BRIEF.md · ROADMAP.md · MODERATION.md
+        └── project() ──► graph.json ──► BRIEF.md · ROADMAP.md* · MODERATION.md*
                           (all derived, gitignored, deletable at any time)
+                          * not written yet: ROADMAP.md unclaimed, MODERATION.md is P-6
 ```
 
+`evidence.jsonl` does not exist yet — `roadmap sync` (P-3) is what appends to it.
+Its `.gitattributes` and `.gitignore` entries are staged ahead of it on purpose, so
+the first record ever written is already merge-safe. Until then no task can read as
+done, and `roadmap next` says so on its second line rather than showing a zeroed
+board without explanation.
+
 Delete everything derived and `roadmap build` reproduces it byte-identically.
-`tests/test_plan.py::test_round_trip_is_byte_stable` is the proof for the plan half.
+`tests/test_plan.py::test_round_trip_is_byte_stable` is the proof for the plan half,
+and `tests/test_project.py` for the graph.
 
 ## Pipeline
 
 ```
-load_plan() → journal.load() → sync() → project() → derive() → render.* → export.*
+load_plan() → journal.load() → sync()* → project() → status.snapshot() → render.* → export.*
+                              * P-3; today the evidence log is simply empty
 ```
 
 Stages pass plain dicts and frozen dataclasses. No stage has side effects outside
@@ -45,6 +54,7 @@ table cannot drift from the code.
 | `journal.py` | `KINDS`, `record`, `append`, `load`, `rejections`, `open_sessions`, `superseded_ids`, `make_id`, `new_session_id`, `sanitize`, `parse_rejection` | the memory log: content-hashed records, first-class rejections, the crash flag |
 | `textmatch.py` | `tokens`, `similarity`, `coverage`, `proposal_score`, `constraint_score`, `prohibited_phrases`, `prohibited_terms`, `rare_tokens`, `distinctive_terms`, `rank`, `best`, `nearest`, `edit_distance`, `MATCH_FLOOR`, `RELATED_FLOOR`, `SINGLE_TERM_WEIGHT` | deterministic matching for the `check` gate and (later) branch↔task mapping |
 | `project.py` | `project`, `write_graph`, `load_graph`, `to_json`, `Graph`, `Node`, `Edge`, `Hyperedge`, `CycleError`, `dependents`, `unblocks`, `task_dag`, `node_id` | plan + journal → graphify-shaped `graph.json` (no networkx) |
+| `status.py` | `snapshot`, `status_of`, `ready_tasks`, `active_phase`, `phase_status`, `critical_path`, `remaining_path`, `load_evidence`, `normalize_evidence`, `Snapshot`, `TaskStatus`, `PhaseStatus`, `STATUSES`, `DONE_STATES`, `EVIDENCE_KINDS`, `LABEL` | (plan, evidence, now) → derived status, ready tasks and the critical path. stdlib `graphlib`; nothing is stored |
 | `traverse.py` | `explain`, `shortest_path`, `query`, `explain_screen`, `path_screen`, `query_screen`, `ensure_graph`, `resolve_node` | stdlib BFS/DFS over `graph.json` |
 | `hooks.py` | `install`, `uninstall`, `status`, `HOOK_START`, `HOOK_END` | marked post-commit / post-checkout scripts that refresh BRIEF.md; never write a git ref |
 | `serve.py` | `call_tool`, `tool_schemas`, `HANDLERS`, `READ_TOOLS`, `WRITE_TOOLS`, `_main` | MCP stdio: six reads + `record_note`; none can set a status |
@@ -54,7 +64,7 @@ table cannot drift from the code.
 | `cli.py` | `dispatch`, `COMMANDS`, `NOT_YET`, `refresh_brief`, `EXIT_REJECTED`, `EXIT_CONSTRAINT`, `EXIT_NOT_YET` | argv → exit code |
 | `__main__.py` | `main` | console entry point |
 
-Not yet built (see the build plan): `status.py`, `gitsync.py`,
+Not yet built (see the build plan): `gitsync.py`,
 `verify.py`, `moderate.py`, `llm.py`, and the session hook half of `install.py`.
 
 ## Exit codes

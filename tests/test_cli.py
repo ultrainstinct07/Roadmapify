@@ -424,3 +424,207 @@ def test_the_unbuilt_footer_names_the_commands_that_work(seeded, run):
         assert name in out
     for name in cli.NOT_YET:
         assert f"· {name} ·" not in out, f"{name} has not shipped but is listed as working"
+
+
+# ── next / tree / expand ──────────────────────────────────────────────────────
+
+def test_next_names_the_active_phase_its_gate_the_ready_tasks_and_the_critical_path(
+        seeded, run):
+    """The NOT_YET table promised these four things by name before the command
+    existed, and that text had already shipped to users."""
+    code, out = run("next", "--root", str(seeded))
+    assert code == EXIT_OK
+    assert "P-1" in out
+    assert "ships" in out and "gate" in out
+    assert "ready now" in out
+    assert "critical path" in out
+
+
+def test_next_says_when_no_evidence_has_been_recorded(seeded, run):
+    """With an empty evidence log every task reads unstarted. A screen that does
+    not say so looks like a project that has achieved nothing."""
+    code, out = run("next", "--root", str(seeded))
+    assert code == EXIT_OK
+    assert "no evidence recorded" in out
+
+
+def test_next_writes_nothing_at_all(seeded, run):
+    """`next` runs from hooks and CI. A read command that writes is one that can
+    lose data under contention."""
+    before = {f.name: f.read_bytes() for f in seeded.rglob("*") if f.is_file()}
+    run("next", "--root", str(seeded))
+    after = {f.name: f.read_bytes() for f in seeded.rglob("*") if f.is_file()}
+    assert before == after
+
+
+def test_tree_works_on_a_fresh_init_with_no_journal_and_no_git(project, run):
+    """P-2's declared demo, and the hardest starting tier: no memory, no repo."""
+    assert not (project / ".git").exists()
+    code, _ = run("init", "a thing that syncs notes", "--root", str(project))
+    assert code == EXIT_OK
+    code, out = run("tree", "--root", str(project))
+    assert code == EXIT_OK
+    assert "P-1" in out
+
+
+def test_tree_marks_provisional_tasks_in_plain_text_not_only_colour(seeded, run):
+    """Dimming is an ANSI escape. Piped to a file, read by an agent, or under
+    NO_COLOR it is invisible — so "provisional tasks dimmed" has to survive as
+    text or the promise is empty."""
+    code, out = run("tree", "--root", str(seeded))
+    assert code == EXIT_OK
+    assert "prov" in out
+    assert "provisional" in out
+
+
+def test_tree_lists_every_task_exactly_once(seeded, run):
+    from roadmapify.plan import load_plan
+    plan = load_plan(seeded)
+    _, out = run("tree", "--root", str(seeded))
+    for t in plan.tasks:
+        assert out.count(f"{t.id}  ") == 1, t.id
+
+
+def test_tree_hide_provisional_shows_only_the_load_bearing_set(seeded, run):
+    from roadmapify.plan import load_plan
+    plan = load_plan(seeded)
+    _, out = run("tree", "--hide-provisional", "--root", str(seeded))
+    for t in plan.tasks:
+        if t.provisional:
+            assert f"{t.id}  " not in out
+
+
+def test_expand_promotes_a_provisional_phase_and_all_of_its_tasks(seeded, run):
+    from roadmapify.plan import load_plan
+    target = next(p.id for p in load_plan(seeded).ordered_phases() if p.provisional)
+    code, out = run("expand", target, "--root", str(seeded))
+    assert code == EXIT_OK
+    after = load_plan(seeded)
+    assert after.phase(target).provisional is False
+    assert not any(t.provisional for t in after.tasks_of(target))
+
+
+def test_expand_never_writes_a_status_field(seeded, run):
+    """The central invariant of the whole tool. `expand` is the first command
+    that writes the plan, so it is the first that could break it."""
+    from roadmapify.plan import load_plan
+    target = next(p.id for p in load_plan(seeded).ordered_phases() if p.provisional)
+    run("expand", target, "--root", str(seeded))
+    assert not re.search(r"^\s*status\s*=", plan_path(seeded).read_text(), re.M)
+
+
+def test_expand_does_not_add_remove_or_reorder_phases(seeded, run):
+    from roadmapify.plan import load_plan
+    before = [(p.id, p.order) for p in load_plan(seeded).ordered_phases()]
+    target = next(p.id for p in load_plan(seeded).ordered_phases() if p.provisional)
+    run("expand", target, "--root", str(seeded))
+    assert [(p.id, p.order) for p in load_plan(seeded).ordered_phases()] == before
+
+
+def test_expand_changes_only_the_provisional_lines(seeded, run):
+    from roadmapify.plan import load_plan
+    from collections import Counter
+    before = Counter(plan_path(seeded).read_text().splitlines())
+    target = next(p.id for p in load_plan(seeded).ordered_phases() if p.provisional)
+    n_promoted = 1 + len(load_plan(seeded).tasks_of(target))
+    run("expand", target, "--root", str(seeded))
+    after = Counter(plan_path(seeded).read_text().splitlines())
+
+    delta = before - after
+    assert delta == Counter({"provisional = true": n_promoted}), delta
+    assert not (after - before), "expand must not add a line"
+
+
+def test_expand_refuses_to_rewrite_a_file_it_cannot_reproduce(seeded, run, capsys):
+    """roadmap.toml is the one tracked source file this tool mutates, and its own
+    header tells you to hand-edit it. Silently eating a reviewer's comment is
+    data loss with no undo outside git."""
+    from roadmapify.plan import load_plan
+    target = next(p.id for p in load_plan(seeded).ordered_phases() if p.provisional)
+    original = plan_path(seeded).read_text()
+    plan_path(seeded).write_text("# NOTE: hand written\n" + original, encoding="utf-8")
+
+    code, _ = run("expand", target, "--root", str(seeded))
+
+    assert code == EXIT_ERROR
+    assert "# NOTE: hand written" in plan_path(seeded).read_text(), "nothing was written"
+    assert "refusing to rewrite" in capsys.readouterr().err
+
+
+def test_expand_force_writes_anyway(seeded, run):
+    from roadmapify.plan import load_plan
+    target = next(p.id for p in load_plan(seeded).ordered_phases() if p.provisional)
+    plan_path(seeded).write_text("# NOTE: hand written\n" + plan_path(seeded).read_text(),
+                                 encoding="utf-8")
+    code, _ = run("expand", target, "--force", "--root", str(seeded))
+    assert code == EXIT_OK
+    assert load_plan(seeded).phase(target).provisional is False
+
+
+def test_expand_dry_run_prints_the_change_and_writes_nothing(seeded, run):
+    from roadmapify.plan import load_plan
+    target = next(p.id for p in load_plan(seeded).ordered_phases() if p.provisional)
+    before = plan_path(seeded).read_bytes()
+    code, out = run("expand", target, "--dry-run", "--root", str(seeded))
+    assert code == EXIT_OK
+    assert "nothing was written" in out
+    assert plan_path(seeded).read_bytes() == before
+
+
+def test_expand_is_idempotent(seeded, run):
+    from roadmapify.plan import load_plan
+    target = next(p.id for p in load_plan(seeded).ordered_phases() if p.provisional)
+    run("expand", target, "--root", str(seeded))
+    once = plan_path(seeded).read_bytes()
+    code, _ = run("expand", target, "--root", str(seeded))
+    assert code == EXIT_OK
+    assert plan_path(seeded).read_bytes() == once
+
+
+def test_expand_says_it_only_cleared_a_flag(seeded, run):
+    """Offline expand cannot invent task detail. A screen implying otherwise
+    sells a capability that does not ship until P-9."""
+    from roadmapify.plan import load_plan
+    target = next(p.id for p in load_plan(seeded).ordered_phases() if p.provisional)
+    _, out = run("expand", target, "--root", str(seeded))
+    assert "only clears the provisional flag" in out
+    assert "no status was written" in out
+
+
+def test_expand_llm_is_announced_as_a_later_phase_rather_than_ignored(seeded, run):
+    """P-9's `ships` names `roadmap expand P-3 --llm` literally, so the flag has
+    to answer for itself — and the text is what distinguishes it from argparse's
+    own exit 2 on a bad flag."""
+    code, out = run("expand", "P-3", "--llm", "--root", str(seeded))
+    assert code == EXIT_NOT_YET
+    assert "P-9" in out
+
+
+def test_expand_without_a_phase_is_an_error(seeded, run, capsys):
+    assert run("expand", "--root", str(seeded))[0] == EXIT_ERROR
+
+
+def test_expand_on_an_unknown_phase_is_an_error(seeded, run, capsys):
+    assert run("expand", "P-99", "--root", str(seeded))[0] == EXIT_ERROR
+
+
+def test_a_dependency_cycle_fails_next_naming_every_hop(seeded, run, capsys):
+    """P-2's exit criterion, verbatim, reached through the command people run."""
+    text = plan_path(seeded).read_text()
+    marker = '[[task]]\nid = "T-01"'
+    assert marker in text
+    text = text.replace(marker, '[[task]]\ndepends_on = ["T-02"]\nid = "T-01"', 1)
+    plan_path(seeded).write_text(text, encoding="utf-8")
+
+    code, _ = run("next", "--root", str(seeded))
+    err = capsys.readouterr().err
+    assert code == EXIT_ERROR
+    assert "cycle" in err
+
+
+def test_no_shipped_command_is_also_announced_as_unbuilt():
+    """The stub table used to be spread LAST into COMMANDS, so implementing a
+    command without deleting its NOT_YET entry silently reinstalled the stub —
+    with exit 2 as the only symptom."""
+    for name in cli.NOT_YET:
+        assert cli.COMMANDS[name].__qualname__.startswith("cmd_not_yet"), name

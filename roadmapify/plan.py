@@ -422,3 +422,19 @@ def with_task(plan: Plan, task: TaskSpec) -> Plan:
     """Return a plan with ``task`` added or replaced."""
     others = tuple(t for t in plan.tasks if t.id != task.id)
     return replace(plan, tasks=others + (task,))
+
+
+def promote_phase(plan: Plan, phase_id: str) -> Plan:
+    """Clear ``provisional`` on one phase and its tasks. Nothing else.
+
+    The phase skeleton is fixed by design — the whole path is emitted at ``init``
+    so it exists before anyone can guess at it — so promoting must not add,
+    remove or reorder a phase. This is the only code that rewrites the plan
+    after ``init``, and it must never write a status: there is no status field,
+    and adding one is a recorded rejection.
+    """
+    phases = tuple(replace(p, provisional=False) if p.id == phase_id else p
+                   for p in plan.phases)
+    tasks = tuple(replace(t, provisional=False) if t.phase == phase_id else t
+                  for t in plan.tasks)
+    return replace(plan, phases=phases, tasks=tasks)

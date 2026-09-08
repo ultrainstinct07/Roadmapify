@@ -22,12 +22,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Reserved for T-22 (P-8), which serves the read tools over STDIO. Nothing in
-# the package imports either of these yet, and there is no console script for
-# them until serve.py exists — an entry point for a missing module installs a
-# binary that tracebacks. starlette is floored above the CVE-2026-48818 /
-# CVE-2026-54283 fixes, matching graphify's pin; it is here because an HTTP
-# transport is the likely second one, not because stdio needs it.
+# serve.py (T-22) serves the read tools over stdio; starlette is floored above
+# the CVE-2026-48818 / CVE-2026-54283 fixes, matching graphify's pin, and is
+# here for the HTTP transport rather than for stdio. The base install still has
+# exactly one conditional dependency — this is an extra, and `roadmap-mcp` says
+# so when it is missing rather than tracebacking.
 mcp = ["mcp>=1,<3", "starlette>=1.3.1,<2"]
 llm = ["anthropic"]
 all = ["mcp>=1,<3", "starlette>=1.3.1,<2", "anthropic"]
@@ -37,6 +36,12 @@ roadmap = "roadmapify.__main__:main"
 # Short alias: `roadmap` is a common enough word that a PATH collision is
 # conceivable, and `rmap next` is faster to type in a loop. One line to hedge it.
 rmap = "roadmapify.__main__:main"
+# Restored now that serve.py exists (T-22/P-8). It was removed while it pointed
+# at a missing module: pip writes the launcher regardless, so the entry point
+# shipped a binary whose first act was a ModuleNotFoundError traceback.
+# tests/test_packaging.py imports every script target to keep that from
+# recurring for hooks.py and llm.py.
+roadmap-mcp = "roadmapify.serve:_main"
 
 [dependency-groups]
 dev = [

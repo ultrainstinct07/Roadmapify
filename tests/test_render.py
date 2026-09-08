@@ -130,3 +130,67 @@ def test_check_screen_surfaces_related_items_when_clear():
 def test_wrap_never_loses_a_word():
     text = "the quick brown fox jumps over the lazy dog " * 5
     assert " ".join(" ".join(render.wrap(text, 20)).split()) == " ".join(text.split())
+
+
+# ── the plan screens ──────────────────────────────────────────────────────────
+
+def _snap(plan):
+    from roadmapify import status
+    return status.snapshot(plan, [], now=NOW)
+
+
+def test_no_plan_screen_line_has_trailing_whitespace(seeded):
+    """Column padding is how trailing spaces get into golden output, and golden
+    output is compared byte for byte."""
+    from roadmapify import render
+    from roadmapify.plan import load_plan
+    plan = load_plan(seeded)
+    snap = _snap(plan)
+    for name, screen in (
+            ("next", render.next_screen(plan, snap, now=NOW)),
+            ("tree", render.tree_screen(plan, snap, now=NOW))):
+        for line in screen.splitlines():
+            assert line == line.rstrip(), f"{name}: {line!r}"
+
+
+def test_next_screen_prints_the_gate_not_just_the_phase_label(seeded):
+    """`ships` and `exit_criteria` are the two fields that stop a phase being a
+    vague bucket; dropping them from the screen drops the reason they are
+    mandatory in the file."""
+    from roadmapify import render
+    from roadmapify.plan import load_plan
+    plan = load_plan(seeded)
+    out = render.next_screen(plan, _snap(plan), now=NOW)
+    ph = plan.phase(_snap(plan).active_phase)
+    assert ph.ships.split()[0] in out
+    assert ph.exit_criteria.split()[0] in out
+
+
+def test_the_plan_screens_are_deterministic_for_fixed_inputs(seeded):
+    from roadmapify import render
+    from roadmapify.plan import load_plan
+    plan = load_plan(seeded)
+    snap = _snap(plan)
+    assert render.next_screen(plan, snap, now=NOW) == render.next_screen(plan, snap, now=NOW)
+    assert render.tree_screen(plan, snap, now=NOW) == render.tree_screen(plan, snap, now=NOW)
+
+
+def test_tree_screen_marks_provisional_without_relying_on_colour(seeded):
+    from roadmapify import render
+    from roadmapify.plan import load_plan
+    plan = load_plan(seeded)
+    out = render.tree_screen(plan, _snap(plan), now=NOW)
+    assert "prov" in out
+
+
+def test_plan_errors_screen_names_every_hop(seeded):
+    from roadmapify import render
+    out = render.plan_errors_screen([], [["T-01", "T-02", "T-01"]])
+    assert "T-01" in out and "T-02" in out
+
+
+def test_rewrite_refusal_screen_names_the_lines_that_would_be_lost():
+    from roadmapify import render
+    out = render.rewrite_refusal_screen(["# NOTE: keep this"], "roadmap expand P-3")
+    assert "# NOTE: keep this" in out
+    assert "--force" in out and "--dry-run" in out

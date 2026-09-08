@@ -416,3 +416,197 @@ def resume_screen(session: "dict | None", new_id: "str | None", *, now: datetime
         L.append("")
         L.append(f"resumed as {bold(new_id)} (resumed_from {session['id']})")
     return "\n".join(L)
+
+
+# ── the plan screens ──────────────────────────────────────────────────────────
+
+SCREEN_WIDTH = 78
+
+#: Status words in PLAIN TEXT. `_NO_COLOR` is true for every pipe, every agent
+#: and every test in this suite, so "provisional tasks are dimmed" survives only
+#: if the word carries the meaning and `dim()` is decoration on top of it.
+STATUS_WORDS = {
+    "blocked": "blocked", "ready": "ready", "active": "active",
+    "done_claimed": "done*", "done": "done",
+}
+
+_STATUS_COLOUR = {"ready": green, "active": cyan, "done": green,
+                  "done_claimed": yellow, "blocked": dim}
+
+
+def _status_word(st, *, provisional: bool = False) -> str:
+    if provisional:
+        return dim("prov")
+    word = STATUS_WORDS.get(st, st)
+    return _STATUS_COLOUR.get(st, dim)(word)
+
+
+def _no_evidence_line(snapshot) -> str:
+    """The line that stops a zeroed screen being a lie by omission.
+
+    P-3's `ships` is "roadmap next prints agreement and coverage on line 2", so
+    this slot is reserved: P-3 overwrites it in place rather than restructuring
+    the screen.
+    """
+    if snapshot.evidence_count:
+        return dim(f"{snapshot.evidence_count} evidence records observed")
+    return dim("no evidence recorded — nothing can read as done yet "
+               "(`roadmap sync`, P-3)")
+
+
+def next_screen(plan, snapshot, *, now: datetime, phase: "str | None" = None) -> str:
+    L = [bold(plan.goal.label), _no_evidence_line(snapshot), ""]
+    pid = phase or snapshot.active_phase
+    ph = plan.phase(pid) if pid else None
+    if ph is None:
+        L.append(dim("every phase is complete."))
+        return "\n".join(L)
+
+    ps = snapshot.phase(ph.id)
+    order = [p.id for p in plan.ordered_phases()]
+    tag = dim("provisional") if ph.provisional else green("active")
+    L.append(f"phase {order.index(ph.id) + 1} of {len(order)}   "
+             f"{bold(ph.label):<44} {cyan(ph.id)}  {tag}")
+    for label, value in (("ships", ph.ships), ("gate", ph.exit_criteria),
+                         ("demo", ph.demo)):
+        if not value:
+            continue
+        for i, line in enumerate(wrap(value, 58)):
+            head = dim(f"{label:<9}") if i == 0 else " " * 9
+            L.append(f"  {head}  {line}")
+    if ps:
+        L.append(f"  {dim('tasks')}      {ps.done} done · "
+                 f"{len([t for t in snapshot.tasks if t.status == 'ready' and not t.provisional])} ready · "
+                 f"{ps.total - ps.done} not done   "
+                 f"({ps.total} load-bearing, {ps.provisional} provisional)")
+
+    ready = [snapshot.task(t) for t in snapshot.ready]
+    L += ["", bold("ready now")] if ready else ["", dim("nothing is ready")]
+    for ts in ready[:6]:
+        task = plan.task(ts.id)
+        L.append(f"  {cyan(ts.id)}  {task.label:<48} {dim(f'frees {ts.unblocks}')}")
+
+    blocked = [t for t in snapshot.tasks
+               if t.status == "blocked" and not t.provisional
+               and plan.task(t.id).phase == ph.id]
+    if blocked:
+        L += ["", dim(f"blocked in {ph.id}")]
+        for ts in blocked[:8]:
+            L.append(f"  {ts.id}  {plan.task(ts.id).label:<40} "
+                     f"{dim('waiting on ' + ', '.join(ts.blocked_by))}")
+
+    path = snapshot.remaining_path or snapshot.critical_path
+    if path:
+        L += ["", f"{bold('critical path')}   {len(path)} tasks"]
+        L.append("  " + " → ".join(path))
+        tail = plan.task(path[-1])
+        if tail:
+            L.append(dim(f"  ends at {tail.id}  {tail.label}   ({tail.phase})"))
+    if snapshot.needs_expand:
+        L += ["", yellow(f"{ph.id} has no load-bearing work left — "
+                         f"`roadmap expand {ph.id}` promotes its tasks.")]
+    return "\n".join(line.rstrip() for line in L)
+
+
+def tree_screen(plan, snapshot, *, now: datetime, only_phase: "str | None" = None,
+                hide_provisional: bool = False, show_deps: bool = False) -> str:
+    load_bearing = [t for t in plan.tasks if not t.provisional]
+    L = [bold(plan.goal.label),
+         dim(f"{len(plan.phases)} phases · {len(plan.tasks)} tasks · "
+             f"{len(load_bearing)} load-bearing · "
+             f"{len(plan.tasks) - len(load_bearing)} provisional · "
+             + ("no evidence recorded" if not snapshot.evidence_count
+                else f"{snapshot.evidence_count} evidence records"))]
+    for ph in plan.ordered_phases():
+        if only_phase and ph.id != only_phase:
+            continue
+        if hide_provisional and ph.provisional:
+            continue
+        ps = snapshot.phase(ph.id)
+        tag = (dim("provisional") if ph.provisional
+               else (green("active") if ph.id == snapshot.active_phase else ""))
+        L += ["", f"{cyan(ph.id)}  {bold(ph.label):<48} {tag}".rstrip()]
+        if ph.provisional:
+            L.append(dim(f"     not load-bearing until `roadmap expand {ph.id}`"))
+        elif ps:
+            L.append(dim(f"     {ps.done} of {ps.total} done"))
+        for line in wrap(f"ships {ph.ships}", 66):
+            L.append(dim(f"     {line}"))
+        for t in sorted(plan.tasks_of(ph.id), key=lambda t: t.id):
+            if hide_provisional and t.provisional:
+                continue
+            ts = snapshot.task(t.id)
+            state = _status_word(ts.status if ts else "blocked", provisional=t.provisional)
+            label = t.label if len(t.label) <= 48 else t.label[:47] + "…"
+            row = f"  {t.id}  {label:<48} {state}"
+            if show_deps and t.depends_on:
+                row += dim(f"  ← {' '.join(t.depends_on)}")
+            L.append(row)
+    L += ["", dim(f"{len(load_bearing)} of {len(plan.tasks)} tasks are load-bearing. "
+                  "The whole path exists; only the near part is load-bearing.")]
+    return "\n".join(line.rstrip() for line in L)
+
+
+def expand_screen(plan, ph, promoted: "tuple[str, ...]", *, wrote: bool,
+                  brief: bool, load_bearing: int, was: int,
+                  warnings: "tuple[str, ...]" = ()) -> str:
+    L = [f"{cyan(ph.id)}  {bold(ph.label):<40} "
+         f"{green('now load-bearing') if wrote else dim('unchanged')}"]
+    for label, value in (("ships", ph.ships), ("gate", ph.exit_criteria)):
+        if not value:
+            continue
+        for i, line in enumerate(wrap(value, 62)):
+            head = dim(f"{label:<9}") if i == 0 else " " * 9
+            L.append(f"  {head}  {line}")
+    if promoted:
+        L += ["", f"  {dim('promoted')}   {len(promoted)} tasks"]
+        for tid in promoted:
+            L.append(f"    {tid}  {plan.task(tid).label}")
+    else:
+        L += ["", dim("  nothing to promote — it was already load-bearing.")]
+    if wrote:
+        L += ["", f"  {dim('roadmap.toml')}   rewritten (byte-stable round trip verified)"]
+        if brief:
+            L.append(f"  {dim('BRIEF.md')}       re-derived")
+    L += ["", f"{bold('load-bearing set')}   {load_bearing} tasks   (was {was})"]
+    for w in warnings:
+        L.append(yellow(f"!  {w}"))
+    L += ["", dim("Nothing was added, removed or reordered, and no status was written."),
+          dim("Offline `expand` only clears the provisional flag — it cannot invent"),
+          dim("task detail. `roadmap expand <P-n> --llm` (P-9) refines these labels"),
+          dim("inside this same fixed skeleton.")]
+    return "\n".join(line.rstrip() for line in L)
+
+
+def plan_errors_screen(errors: "list[str]", cycles: "list[list[str]]") -> str:
+    L = []
+    if cycles:
+        L.append(red("the plan has a dependency cycle. There is no 'next task' in it."))
+        for cyc in cycles:
+            L.append("")
+            L.append("  " + " → ".join(cyc))
+        L += ["", dim("  break one edge in roadmap.toml, then run this again.")]
+    for e in errors:
+        L.append(red(f"  {e}"))
+    return "\n".join(L)
+
+
+def rewrite_refusal_screen(lost: "list[str]", command: str) -> str:
+    """`expand` refuses rather than silently dropping a hand edit.
+
+    roadmap.toml is the one tracked source file this tool rewrites, and its own
+    header tells you to hand-edit it. `emit_plan` reproduces a fixed set of
+    comments and nothing else, so a reviewer's note is data loss with no undo
+    outside git.
+    """
+    L = [red("refusing to rewrite roadmap.toml") +
+         " — it carries hand edits this version",
+         "      cannot reproduce byte for byte.", ""]
+    L.append(f"      {len(lost)} line(s) would be lost:")
+    for line in lost[:8]:
+        L.append(dim(f"        {line}"))
+    if len(lost) > 8:
+        L.append(dim(f"        … and {len(lost) - 8} more"))
+    L += ["", dim(f"      `{command} --dry-run`  shows the change and writes nothing"),
+          dim(f"      `{command} --force`    writes anyway, dropping the lines above")]
+    return "\n".join(L)

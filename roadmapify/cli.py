@@ -26,7 +26,9 @@ from roadmapify.paths import (
     project_root,
     write_text_atomic,
 )
-from roadmapify.plan import Goal, emit_plan, find_cycles, load_plan, validate_plan
+from roadmapify import status
+from roadmapify.plan import (Goal, emit_plan, find_cycles, load_plan, parse_plan,
+                             promote_phase, validate_plan)
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -763,10 +765,143 @@ EXIT_NOT_YET = 2
 #: shipped answer for themselves instead of falling through to
 #: "unknown command", which reads to an agent as a broken install and sends it
 #: back to guessing.
+
+# ── the plan screens ──────────────────────────────────────────────────────────
+
+def _plan_or_fail(root):
+    """(plan, snapshot) or (None, exit code).
+
+    A plan with a cycle has no order and therefore no 'next task', which is the
+    only question these three commands exist to answer — so a cycle fails them
+    all, naming every hop. That is P-2's exit criterion.
+    """
+    plan = load_plan(root)
+    if plan is None:
+        return None, None, _err('no roadmap.toml here — run `roadmap init "<goal>"` first')
+    errors, cycles = validate_plan(plan), find_cycles(plan)
+    if errors or cycles:
+        print(render.plan_errors_screen(errors, cycles), file=sys.stderr)
+        return None, None, EXIT_ERROR
+    snap = status.snapshot(plan, status.load_evidence(root), now=_now())
+    return plan, snap, EXIT_OK
+
+
+def cmd_next(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="roadmap next")
+    p.add_argument("--phase", default=None, metavar="P-n")
+    p.add_argument("--root", default=None)
+    a = p.parse_args(argv)
+    root = Path(a.root).resolve() if a.root else project_root()
+    plan, snap, code = _plan_or_fail(root)
+    if plan is None:
+        return code
+    if a.phase and plan.phase(a.phase) is None:
+        return _err(f"no phase {a.phase!r} in this plan.")
+    print(render.next_screen(plan, snap, now=_now(), phase=a.phase))
+    return EXIT_OK
+
+
+def cmd_tree(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="roadmap tree")
+    p.add_argument("--phase", default=None, metavar="P-n")
+    p.add_argument("--hide-provisional", dest="hide_provisional", action="store_true")
+    p.add_argument("--deps", action="store_true", help="show each task's dependencies")
+    p.add_argument("--root", default=None)
+    a = p.parse_args(argv)
+    root = Path(a.root).resolve() if a.root else project_root()
+    plan, snap, code = _plan_or_fail(root)
+    if plan is None:
+        return code
+    if a.phase and plan.phase(a.phase) is None:
+        return _err(f"no phase {a.phase!r} in this plan.")
+    print(render.tree_screen(plan, snap, now=_now(), only_phase=a.phase,
+                             hide_provisional=a.hide_provisional, show_deps=a.deps))
+    return EXIT_OK
+
+
+def _lost_lines(disk: str, emitted: str) -> "list[str]":
+    """Lines the round trip cannot reproduce — hand-written comments, unknown
+    keys, a hand ordering. ``difflib`` is stdlib; nothing new is pulled in."""
+    import difflib
+    return [ln[1:] for ln in difflib.unified_diff(
+        disk.splitlines(), emitted.splitlines(), n=0, lineterm="")
+        if ln.startswith("-") and not ln.startswith("---")]
+
+
+def cmd_expand(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="roadmap expand")
+    p.add_argument("phase", nargs="?", metavar="P-n")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true")
+    p.add_argument("--force", action="store_true",
+                   help="rewrite even if hand edits would be lost")
+    p.add_argument("--llm", action="store_true")
+    p.add_argument("--root", default=None)
+    a = p.parse_args(argv)
+
+    if a.llm:
+        # P-9's `ships` names `roadmap expand P-3 --llm` literally, so a promised
+        # capability answers for itself rather than being silently ignored.
+        print(f"{render.yellow('not built yet')} — `roadmap expand --llm` ships in "
+              f"{render.bold('P-9')}.")
+        print("  it will: refine the tasks inside this fixed phase skeleton")
+        print()
+        print(render.dim("`roadmap expand <P-n>` promotes them offline today."))
+        return EXIT_NOT_YET
+
+    if not a.phase:
+        return _err('which phase?  roadmap expand P-3')
+    root = Path(a.root).resolve() if a.root else project_root()
+    plan, snap, code = _plan_or_fail(root)
+    if plan is None:
+        return code
+    ph = plan.phase(a.phase)
+    if ph is None:
+        return _err(f"no phase {a.phase!r} in this plan.")
+
+    was = len([t for t in plan.tasks if not t.provisional])
+    promoted = tuple(sorted(t.id for t in plan.tasks_of(ph.id) if t.provisional))
+    after = promote_phase(plan, ph.id)
+    emitted = emit_plan(after)
+    path = plan_path(root)
+    disk = path.read_text(encoding="utf-8")
+
+    # The faithfulness check. emit_plan reproduces a FIXED set of comments and
+    # sorts tasks; it round-trips a generated file byte for byte and silently
+    # eats anything else. roadmap.toml's own header says "Hand-edit this file",
+    # so writing blind here is data loss with no undo outside git.
+    faithful = emit_plan(parse_plan(disk)) == disk
+    if not faithful and not a.force:
+        print(render.rewrite_refusal_screen(
+            _lost_lines(disk, emit_plan(parse_plan(disk))),
+            f"roadmap expand {ph.id}"), file=sys.stderr)
+        return EXIT_ERROR
+
+    if a.dry_run:
+        print(render.expand_screen(after, after.phase(ph.id), promoted, wrote=False,
+                                   brief=False,
+                                   load_bearing=len([t for t in after.tasks
+                                                     if not t.provisional]), was=was))
+        print()
+        print(render.dim("--dry-run: nothing was written."))
+        return EXIT_OK
+
+    warnings = tuple(
+        f"{p2.id} is still provisional, so the load-bearing set now has a gap. "
+        "That is allowed; the health denominators will show it."
+        for p2 in after.ordered_phases()
+        if p2.provisional and p2.order < ph.order)
+
+    write_text_atomic(path, emitted)
+    brief = refresh_brief(root) is not None
+    print(render.expand_screen(after, after.phase(ph.id), promoted, wrote=True,
+                               brief=brief,
+                               load_bearing=len([t for t in after.tasks
+                                                 if not t.provisional]),
+                               was=was, warnings=warnings))
+    return EXIT_OK
+
+
 NOT_YET = {
-    "next": ("P-2", "the active phase, its gate, the ready tasks and the critical path"),
-    "tree": ("P-2", "the whole plan with provisional tasks dimmed"),
-    "expand": ("P-2", "promote a provisional phase's tasks into the load-bearing set"),
     "sync": ("P-3", "read git and derive task status from real commits"),
     "start": ("P-3", "open a session and print the branch name and commit trailer"),
     "done": ("P-3", "record a self-report, pending merge evidence"),
@@ -810,12 +945,21 @@ COMMANDS = {
     "doctor": cmd_doctor,
     "install": cmd_install,
     "export": cmd_export,
+    "next": cmd_next,
+    "tree": cmd_tree,
+    "expand": cmd_expand,
     "explain": cmd_explain,
     "path": cmd_path,
     "query": cmd_query,
     "hook": cmd_hook,
-    **{name: cmd_not_yet(name) for name in NOT_YET},
 }
+
+# setdefault, not a dict spread. The spread sat LAST in the literal, so
+# implementing a command and forgetting to delete its NOT_YET entry silently
+# reinstalled the stub, with exit 2 as the only symptom. Five more phases each
+# add commands this way.
+for _name in NOT_YET:
+    COMMANDS.setdefault(_name, cmd_not_yet(_name))
 
 HELP = """roadmap - a phased build plan with memory that survives context loss
 
@@ -830,6 +974,14 @@ HELP = """roadmap - a phased build plan with memory that survives context loss
                         · 4 violates a constraint
   roadmap why <id | "text">
                         what was decided about this, and what it reversed
+  roadmap next [--phase P-n]
+                        the active phase, its gate, the ready tasks and the
+                        critical path
+  roadmap tree [--phase P-n] [--hide-provisional] [--deps]
+                        the whole plan; provisional tasks are marked `prov`
+  roadmap expand <P-n> [--dry-run] [--force]
+                        promote a provisional phase into the load-bearing set.
+                        Offline, it only clears the flag
   roadmap brief [--print]
                         re-render roadmap-out/BRIEF.md  (alias: roadmap build)
   roadmap explain <id | "text">

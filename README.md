@@ -35,10 +35,10 @@ plain-text files are the truth:
 |---|---|---|
 | `roadmap.toml` | tracked, hand-edited | the plan: goal, phases, tasks, deliverables |
 | `roadmap-out/journal.jsonl` | tracked, append-only | the memory: decisions, rejections, constraints |
-| `roadmap-out/evidence.jsonl` | tracked, append-only | observed git facts |
+| `roadmap-out/evidence.jsonl` | tracked, append-only | observed git facts — written from P-3 |
 
-Everything else under `roadmap-out/` — the graph, `BRIEF.md`, `ROADMAP.md` — is
-derived, gitignored and disposable. Delete it and `roadmap build` reproduces it
+Everything else under `roadmap-out/` — `graph.json`, `BRIEF.md` — is derived,
+gitignored and disposable. Delete it and `roadmap build` reproduces it
 byte-identically.
 
 The two append-only logs use git's built-in `merge=union` and content-hashed record
@@ -63,6 +63,9 @@ No tree-sitter, no networkx, no network calls. Everything works with no API key.
 | `roadmap check "<approach>"` | is this already ruled out? `0` clear · `3` rejected · `4` violates a constraint |
 | `roadmap why <id \| "text">` | what was decided, and what reversed it |
 | `roadmap brief` | re-render `roadmap-out/BRIEF.md` (alias: `roadmap build`) |
+| `roadmap next` | the active phase, its gate, the ready tasks and the critical path |
+| `roadmap tree` | the whole plan; provisional tasks marked `prov` |
+| `roadmap expand <P-n>` | promote a provisional phase into the load-bearing set |
 | `roadmap explain <id \| "text">` | one node: source, degree, neighbors tagged EXTRACTED/INFERRED |
 | `roadmap path <a> <b>` | shortest path between two plan/memory nodes |
 | `roadmap query "<question>"` | scoped subgraph for a plain-language question |
@@ -82,7 +85,7 @@ ships before any graph, git sync or phase logic, deliberately: it is the part th
 pays for itself immediately, and the journal starts accumulating real content that
 the later phases are tested against.
 
-Still to come: P-2 `roadmap next` / ready lists, P-3 git sync and derived task
+Still to come: P-3 git sync and derived task
 status, P-5 `roadmap verify`, P-6 `roadmap moderate` (branch hygiene,
 report-only — it never writes a git ref), and P-9 the optional LLM refinement
 pass. Hooks, the skill, MCP, and query/path/explain already ship.
