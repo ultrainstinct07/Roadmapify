@@ -79,10 +79,9 @@ order = 5
 intent = "Claimed-done versus actually-present, with the optional code-graph bridge"
 # a literal command or observable outcome — if you cannot write this,
 # the phase is not a phase yet
-ships = "`roadmap verify` reports present / missing / unverifiable per deliverable"
+ships = "`roadmap verify` reports present / missing / unverifiable / unresolvable per deliverable"
 exit_criteria = "a task claiming done with an absent deliverable is contradicted"
 demo = "mark something done that does not exist"
-provisional = true
 
 [[phase]]
 id = "P-6"
@@ -255,6 +254,26 @@ produces = [
 origin = "human"
 
 [[task]]
+id = "T-27"
+label = "Make or remove `roadmap check --json`"
+phase = "P-1"
+intent = "a declared flag that is never read is a worse surface than no flag"
+depends_on = ["T-07"]
+origin = "human"
+
+[[task]]
+id = "T-28"
+label = "One deliverable-spec parser, not two"
+phase = "P-1"
+intent = "export.py partitions specs itself, so its chips and verify's rows describe the same spec differently"
+depends_on = ["T-24"]
+produces = [
+    "file:roadmapify/export.py",
+    "test:tests/test_export.py",
+]
+origin = "human"
+
+[[task]]
 id = "T-09"
 label = "Project the plan and journal into a graph"
 phase = "P-2"
@@ -334,14 +353,24 @@ origin = "human"
 id = "T-16"
 label = "Deliverable resolution"
 phase = "P-5"
-provisional = true
+intent = "stat, glob and ast.parse only — never execute what a tracked file names"
+depends_on = ["T-10"]
+produces = [
+    "file:roadmapify/verify.py",
+    "test:tests/test_verify.py",
+]
 origin = "human"
 
 [[task]]
 id = "T-17"
 label = "The optional graphify code-graph bridge"
 phase = "P-5"
-provisional = true
+intent = "a graph graphify wrote out of band answers symbol:, and never promotes a task"
+depends_on = ["T-16"]
+produces = [
+    "file:roadmapify/references/verify.md",
+    "test:tests/test_verify_graph.py",
+]
 origin = "human"
 
 [[task]]

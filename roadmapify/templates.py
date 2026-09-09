@@ -11,8 +11,10 @@ Each archetype emits the COMPLETE path — every phase to a shippable app — wi
 tasks beyond the second phase marked ``provisional``. Provisional tasks are
 visible in ``roadmap tree`` (the user asked for a path to a finished app, and a
 path that stops after phase two is not one) but are excluded from ready lists,
-from verify, and from both health denominators, so a guess made on day one can
-never make the roadmap lie about itself on day thirty.
+from verify's denominators, and from both health denominators, so a guess made
+on day one can never make the roadmap lie about itself on day thirty. A
+provisional task that claims done with an absent deliverable is still
+contradicted — that is the plan being behind the work, not a guess.
 """
 
 from __future__ import annotations

@@ -55,6 +55,7 @@ table cannot drift from the code.
 | `textmatch.py` | `tokens`, `similarity`, `coverage`, `proposal_score`, `constraint_score`, `prohibited_phrases`, `prohibited_terms`, `rare_tokens`, `distinctive_terms`, `rank`, `best`, `nearest`, `edit_distance`, `MATCH_FLOOR`, `RELATED_FLOOR`, `SINGLE_TERM_WEIGHT` | deterministic matching for the `check` gate and (later) branch↔task mapping |
 | `project.py` | `project`, `write_graph`, `load_graph`, `to_json`, `Graph`, `Node`, `Edge`, `Hyperedge`, `CycleError`, `dependents`, `unblocks`, `task_dag`, `node_id` | plan + journal → graphify-shaped `graph.json` (no networkx) |
 | `status.py` | `snapshot`, `status_of`, `ready_tasks`, `active_phase`, `phase_status`, `critical_path`, `remaining_path`, `load_evidence`, `normalize_evidence`, `Snapshot`, `TaskStatus`, `PhaseStatus`, `STATUSES`, `DONE_STATES`, `EVIDENCE_KINDS`, `LABEL` | (plan, evidence, now) → derived status, ready tasks and the critical path. stdlib `graphlib`; nothing is stored |
+| `verify.py` | `verify`, `resolve`, `resolve_spec`, `anchor`, `in_scope`, `Report`, `Resolution`, `TaskVerification`, `VERDICTS`, `METHODS`, `FINDINGS`, `PRESENT`, `MISSING`, `UNVERIFIABLE`, `UNRESOLVABLE`, `PRUNE_DIRS`, `GLOB_MATCH_CAP`, `GLOB_CANDIDATE_CAP`, `AST_BYTE_CAP` | (plan, snapshot, working tree) → what the plan promised versus what is on disk. Stats, globs and `ast.parse`; never executes, never writes |
 | `traverse.py` | `explain`, `shortest_path`, `query`, `explain_screen`, `path_screen`, `query_screen`, `ensure_graph`, `resolve_node` | stdlib BFS/DFS over `graph.json` |
 | `hooks.py` | `install`, `uninstall`, `status`, `HOOK_START`, `HOOK_END` | marked post-commit / post-checkout scripts that refresh BRIEF.md; never write a git ref |
 | `serve.py` | `call_tool`, `tool_schemas`, `HANDLERS`, `READ_TOOLS`, `WRITE_TOOLS`, `_main` | MCP stdio: six reads + `record_note`; none can set a status |
@@ -65,7 +66,7 @@ table cannot drift from the code.
 | `__main__.py` | `main` | console entry point |
 
 Not yet built (see the build plan): `gitsync.py`,
-`verify.py`, `moderate.py`, `llm.py`, and the session hook half of `install.py`.
+`moderate.py`, `llm.py`, and the session hook half of `install.py`.
 
 ## Exit codes
 
@@ -79,6 +80,7 @@ code, not prose.
 | 2 | the command is real but has not shipped yet — it names its phase |
 | 3 | already rejected by a recorded decision |
 | 4 | violates a recorded constraint |
+| 5 | a claim is contradicted — something the plan says is done is not on disk |
 
 ## Two floors, not one
 

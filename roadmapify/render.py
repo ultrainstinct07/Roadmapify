@@ -441,21 +441,21 @@ def _status_word(st, *, provisional: bool = False) -> str:
     return _STATUS_COLOUR.get(st, dim)(word)
 
 
-def _no_evidence_line(snapshot) -> str:
+def _no_evidence_line(count: int) -> str:
     """The line that stops a zeroed screen being a lie by omission.
 
     P-3's `ships` is "roadmap next prints agreement and coverage on line 2", so
     this slot is reserved: P-3 overwrites it in place rather than restructuring
     the screen.
     """
-    if snapshot.evidence_count:
-        return dim(f"{snapshot.evidence_count} evidence records observed")
+    if count:
+        return dim(f"{count} evidence record" + ("s" if count > 1 else "") + " observed")
     return dim("no evidence recorded — nothing can read as done yet "
                "(`roadmap sync`, P-3)")
 
 
 def next_screen(plan, snapshot, *, now: datetime, phase: "str | None" = None) -> str:
-    L = [bold(plan.goal.label), _no_evidence_line(snapshot), ""]
+    L = [bold(plan.goal.label), _no_evidence_line(snapshot.evidence_count), ""]
     pid = phase or snapshot.active_phase
     ph = plan.phase(pid) if pid else None
     if ph is None:
@@ -610,3 +610,157 @@ def rewrite_refusal_screen(lost: "list[str]", command: str) -> str:
     L += ["", dim(f"      `{command} --dry-run`  shows the change and writes nothing"),
           dim(f"      `{command} --force`    writes anyway, dropping the lines above")]
     return "\n".join(L)
+
+
+# ── verify ────────────────────────────────────────────────────────────────────
+
+_VERDICT_COLOUR = {"present": green, "missing": red,
+                   "unverifiable": yellow, "unresolvable": yellow}
+
+#: Every deliverable value printed here is `Resolution.display` — never `.spec`,
+#: never `.value`. roadmap.toml is an unsanitised, PR-editable input and `cmd:`
+#: text is the most attacker-shaped string in it.
+VERIFY_FOOTER = (
+    "present means the named path exists — nothing more. Not that the work is "
+    "finished, not that the test passes. verify executes nothing: no test was "
+    "run, no command, no repository code imported. It writes nothing.")
+
+
+def _ellipsis(text: str, width: int) -> str:
+    return text if len(text) <= width else text[:width - 1] + "…"
+
+
+def verify_screen(plan, report, *, now: datetime) -> str:
+    """Pure. ``now`` feeds exactly one thing: `ago()` on a contradiction row."""
+    from roadmapify import verify as _v
+
+    c = report.counts()
+    L = [bold(report.goal), _no_evidence_line(report.evidence_count), ""]
+    scope = f" · scope {report.scope}" if report.scope else ""
+    L.append(f"  {dim('checked')}      {c['tasks']} task"
+             f"{'s' if c['tasks'] != 1 else ''} · {c['deliverables']} deliverables"
+             f" · {c['declarations']} declarations{scope}")
+    L.append(f"  {dim('resolved')}     {c['present']} present · {c['missing']} missing"
+             f" · {c['unverifiable']} unverifiable · {c['unresolvable']} unresolvable")
+    methods = {m: sum(1 for r in report.resolutions if r.method == m)
+               for m in ("stat", "glob", "graph", "none")}
+    L.append(f"  {dim('method')}       {methods['stat']} stat · {methods['glob']} glob"
+             f" · {methods['graph']} code graph · {methods['none']} no method exists")
+    L.append(f"  {dim('weakest')}      {c['weak']} present on weak evidence "
+             f"(empty file, directory, glob, no tests)")
+    if c["undeclared"]:
+        n = c["undeclared"]
+        L.append(f"  {dim('undeclared')}   {n} task{'s' if n != 1 else ''} in scope "
+                 f"{'declare' if n != 1 else 'declares'} nothing to check")
+    if report.skipped_provisional:
+        L.append(f"  {dim('skipped')}      {report.skipped_provisional} provisional "
+                 f"tasks — they declare nothing to hold them to")
+
+    contradicted = report.contradicted
+    if contradicted:
+        L += ["", red("CONTRADICTED")]
+        for t in contradicted:
+            word = _v.LABEL_DONE.get(t.status, t.status)
+            for spec in t.contradicted_by:
+                res = report.resolution(spec)
+                L.append(f"  {t.id} claims {word}, and {res.shown if res else spec} "
+                         f"is not on disk.")
+            seen = f"claimed {ago(t.last_seen, now)} ago · " if t.last_seen else ""
+            L.append(dim(f"       {seen}roadmap.toml:{t.line} declares it"))
+        L += [dim("  A claim is a self-report. This one disagrees with the "
+                  "filesystem; neither"),
+              dim("  is proof, and verify is not choosing between them. Do the "
+                  "work, or fix"),
+              dim("  the `produces` line.")]
+    elif c["claimed"]:
+        L += ["", green("CORROBORATED"),
+              dim(f"  {c['claimed']} task(s) claim done and every declared "
+                  "deliverable is on disk.")]
+    else:
+        L += ["", bold("claims"),
+              dim(f"  0 of {c['tasks']} tasks claim done, so nothing here is "
+                  "contradicted and"),
+              dim("  nothing here is corroborated. The evidence log does not "
+                  "exist yet:"),
+              dim("  `roadmap sync` (P-3) is what turns commits into claims.")]
+
+    for pid in report.phases:
+        ph = plan.phase(pid)
+        L += ["", f"{cyan(pid)}  {bold(ph.label if ph else pid)}"]
+        for t in [x for x in report.tasks if x.phase == pid]:
+            tag = dim("prov ") if t.provisional else ""
+            word = (red("claims " + _v.LABEL_DONE.get(t.status, t.status))
+                    if t.claimed else dim(_v.FINDING_WORDS.get(t.finding, "—")))
+            L.append(f"  {t.id}  {_ellipsis(t.label, 44):<44}  {tag}{word}")
+            if not t.specs:
+                L.append(dim(f"        {'undeclared':<13} "
+                             "nothing declared — nothing to check"))
+            for spec in t.specs:
+                res = report.resolution(spec)
+                if res is None:
+                    continue
+                colour = _VERDICT_COLOUR.get(res.verdict, dim)
+                mark = " ·weak" if res.weak else ""
+                L.append(f"        {colour(f'{res.verdict:<13}')}"
+                         f"{_ellipsis(res.shown, 35):<36}{res.detail}{dim(mark)}")
+
+    L.append("")
+    for line in wrap(VERIFY_FOOTER, 70):
+        L.append(dim(f"  {line}"))
+    L.append(dim("  scope it:  roadmap verify T-nn · --phase P-n · "
+                 "--claimed-only · --json"))
+    return "\n".join(line.rstrip() for line in L)
+
+
+def verify_json(report, *, now: datetime) -> str:
+    """Pure. Sorted keys, no clock reading in any field, so two runs on the same
+    tree are byte-identical and diffable. No `exit` field: the caller already has
+    the process exit code, and duplicating the contract is how it drifts."""
+    import json
+
+    from roadmapify import verify as _v
+
+    def task_obj(t):
+        mine = [report.resolution(s) for s in t.specs]
+        mine = [r for r in mine if r]
+        obj = {
+            "id": t.id, "label": t.label, "phase": t.phase, "status": t.status,
+            "claimed": t.claimed, "provisional": t.provisional,
+            "counted": t.counted, "line": t.line, "specs": list(t.specs),
+            "finding": t.finding, "contradicted_by": list(t.contradicted_by),
+            "evidence": list(t.evidence), "last_seen": t.last_seen,
+        }
+        for v in _v.VERDICTS:
+            obj[v] = sum(1 for r in mine if r.verdict == v)
+        return obj
+
+    def deliverable_obj(r):
+        obj = {
+            "spec": r.spec, "display": r.display, "shown": r.shown,
+            "kind": r.kind, "value": r.value,
+            "verdict": r.verdict, "method": r.method, "detail": r.detail,
+            "weak": r.weak, "size": r.size, "matches": r.matches,
+            "declared_by": list(r.declared_by), "line": r.line,
+        }
+        if r.kind == "test":
+            # A note string can be dropped by a consumer; a field cannot. This is
+            # how no downstream tool ever reads `present` as `passing`.
+            obj["passes"] = "unverifiable"
+        return obj
+
+    findings = {f: [t.id for t in report.tasks if t.finding == f] for f in _v.FINDINGS}
+    obj = {
+        "schema": _v.JSON_SCHEMA,
+        "command": "verify",
+        "root": report.root,
+        "goal": report.goal,
+        "scope": report.scope,
+        "verdict": report.verdict,
+        "evidence_records": report.evidence_count,
+        "counts": report.counts(),
+        "findings": findings,
+        "tasks": [task_obj(t) for t in sorted(report.tasks, key=lambda t: t.id)],
+        "deliverables": [deliverable_obj(r) for r in
+                         sorted(report.resolutions, key=lambda r: r.spec)],
+    }
+    return json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n"

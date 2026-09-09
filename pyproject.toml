@@ -54,10 +54,11 @@ packages = ["roadmapify"]
 include-package-data = false
 
 [tool.setuptools.package-data]
-# skill.md and references/*.md arrive with T-20 (P-7). A glob that matches
-# nothing is silently dropped from the wheel, so declaring them early looks like
-# shipped package data and is not.
-roadmapify = ["always_on/*.md"]
+# A glob that matches nothing is silently dropped from the wheel, so every
+# pattern here must match a real file — tests/test_packaging.py enforces it.
+# skill.md and references/ arrived with T-20; without them the installed skill
+# is a directory of dangling links.
+roadmapify = ["skill.md", "references/*.md", "always_on/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

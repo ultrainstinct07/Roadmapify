@@ -382,9 +382,10 @@ def test_the_always_on_block_only_names_real_or_announced_commands(project, run)
 
 
 def test_exit_codes_are_all_distinct():
-    from roadmapify.cli import (EXIT_CONSTRAINT, EXIT_ERROR, EXIT_NOT_YET, EXIT_OK,
-                                EXIT_REJECTED)
-    codes = [EXIT_OK, EXIT_ERROR, EXIT_NOT_YET, EXIT_REJECTED, EXIT_CONSTRAINT]
+    from roadmapify.cli import (EXIT_CONSTRAINT, EXIT_CONTRADICTED, EXIT_ERROR,
+                                EXIT_NOT_YET, EXIT_OK, EXIT_REJECTED)
+    codes = [EXIT_OK, EXIT_ERROR, EXIT_NOT_YET, EXIT_REJECTED, EXIT_CONSTRAINT,
+             EXIT_CONTRADICTED]
     assert len(set(codes)) == len(codes)
 
 
@@ -418,7 +419,7 @@ def test_the_readme_documents_no_command_that_does_not_exist():
 def test_the_unbuilt_footer_names_the_commands_that_work(seeded, run):
     """It is the text an agent sees at the exact moment it reached for something
     that does not exist yet, so it is the one list that must never be stale."""
-    code, out = run("verify", "--root", str(seeded))
+    code, out = run("moderate", "--root", str(seeded))
     assert code == EXIT_NOT_YET
     for name in ("init", "note", "check", "export"):
         assert name in out

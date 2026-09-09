@@ -87,9 +87,12 @@ class TaskSpec:
     branch: str = ""
     #: True for tasks beyond the next phase. They are visible in `roadmap tree`
     #: so the COMPLETE path exists (the user asked for a path to a finished
-    #: app), but excluded from ready lists, from verify, and from both health
-    #: denominators — an unreviewed guess must never be able to make the
-    #: roadmap lie about itself. `roadmap expand` promotes them.
+    #: app), but excluded from ready lists, from verify's denominators, and
+    #: from both health denominators — an unreviewed guess must never be able
+    #: to make the roadmap lie about itself. `roadmap expand` promotes them.
+    #: One thing is NOT suppressed: a provisional task claiming done with an
+    #: absent deliverable is still contradicted, because the plan being behind
+    #: the work is the very thing this flag must not hide.
     provisional: bool = False
     origin: str = "template"  # template | human | llm | agent
     line: int = field(default=0, compare=False)
@@ -119,7 +122,13 @@ class Plan:
 
 def split_deliverable(spec: str) -> tuple[str, str]:
     """``"file:a/b.py"`` -> ``("file", "a/b.py")``. A bare path defaults to ``file``."""
-    kind, sep, rest = spec.partition(":")
+    # .strip() first: `_tuple`'s scalar branch returns (v,) without stripping, so
+    # a bare TOML string `produces = "  file: a.py"` arrives whole and the kind
+    # prefix would become part of the path — verify would then report a missing
+    # file literally named "file: a.py", an accusation about a file nobody meant
+    # to create. Strictly widening: it only changes specs that today produce a
+    # nonsense value.
+    kind, sep, rest = spec.strip().partition(":")
     if sep and kind in DELIVERABLE_KINDS:
         return kind, rest.strip()
     return "file", spec.strip()

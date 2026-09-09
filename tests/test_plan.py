@@ -117,3 +117,12 @@ def test_split_deliverable():
 
 def test_empty_plan_parses():
     assert parse_plan("schema = 1\n[goal]\nlabel = \"x\"\n").goal.label == "x"
+
+
+def test_a_deliverable_spec_with_leading_whitespace_still_names_its_kind():
+    """`_tuple`'s scalar branch does not strip, so `produces = "  file: a.py"`
+    reaches split_deliverable whole. Without the strip the kind prefix becomes
+    part of the path and verify reports a missing file named 'file: a.py' — an
+    accusation about a file nobody ever meant to create."""
+    assert split_deliverable("  file: a.py") == ("file", "a.py")
+    assert split_deliverable("notes:2026.md") == ("file", "notes:2026.md")

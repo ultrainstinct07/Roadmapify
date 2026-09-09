@@ -14,7 +14,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from roadmapify import journal, render, templates, textmatch
+from roadmapify import journal, render, templates, textmatch, verify
 from roadmapify.paths import (
     BRIEF_FILENAME,
     LockBusy,
@@ -32,8 +32,15 @@ from roadmapify.plan import (Goal, emit_plan, find_cycles, load_plan, parse_plan
 
 EXIT_OK = 0
 EXIT_ERROR = 1
+EXIT_NOT_YET = 2          # the command is real but has not shipped yet
 EXIT_REJECTED = 3
 EXIT_CONSTRAINT = 4
+#: A task whose derived status says done has a deliverable that is not on disk.
+#: Distinct from 3 and 4, which are provenance-typed: each renders the journal
+#: record it matched and both mean "read the reason and do not re-propose". A
+#: contradiction has no record to show and the opposite remediation — do the
+#: work, or fix the `produces` line.
+EXIT_CONTRADICTED = 5
 
 _GITIGNORE_START = "# >>> roadmapify >>>"
 _GITIGNORE_END = "# <<< roadmapify <<<"
@@ -184,7 +191,8 @@ def cmd_init(argv: list[str]) -> int:
     print(f"{attrs:>9} .gitattributes    merge=union on the 2 append-only logs")
     print()
     print(render.dim("Provisional tasks are visible in `roadmap tree` but excluded from"))
-    print(render.dim("ready lists, verify and the health scores until `roadmap expand`."))
+    print(render.dim("ready lists, verify's denominators and the health scores until"))
+    print(render.dim("`roadmap expand`."))
     print(render.dim("The whole path exists; only the near part is load-bearing."))
     if not goal.why:
         print()
@@ -757,7 +765,6 @@ def cmd_hook(argv: list[str]) -> int:
 
 #: Distinct from 0 (clear), 1 (error), 3 (rejected) and 4 (constraint), so a
 #: caller can tell "this command does not exist yet" from "this command failed".
-EXIT_NOT_YET = 2
 
 #: The always-on block and the README name the whole command surface, because
 #: that text has to be stable — rewriting an agent's instructions every phase is
@@ -826,6 +833,39 @@ def _lost_lines(disk: str, emitted: str) -> "list[str]":
     return [ln[1:] for ln in difflib.unified_diff(
         disk.splitlines(), emitted.splitlines(), n=0, lineterm="")
         if ln.startswith("-") and not ln.startswith("---")]
+
+
+def cmd_verify(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="roadmap verify")
+    p.add_argument("task", nargs="?", metavar="T-nn",
+                   help="one task (default: every load-bearing task)")
+    p.add_argument("--phase", default=None, metavar="P-n")
+    p.add_argument("--claimed-only", dest="claimed_only", action="store_true",
+                   help="only tasks evidence says are done")
+    p.add_argument("--json", action="store_true",
+                   help="the whole report on stdout, machine-readable")
+    p.add_argument("--root", default=None)
+    a = p.parse_args(argv)
+
+    root = Path(a.root).resolve() if a.root else project_root()
+    plan, snap, code = _plan_or_fail(root)
+    if plan is None:
+        return code
+    if a.task and plan.phase(a.task) is not None:
+        return _err(f"{a.task} is a phase — try `roadmap verify --phase {a.task}`")
+    if a.task and plan.task(a.task) is None:
+        return _err(f"no task {a.task!r} in this plan.")
+    if a.phase and plan.phase(a.phase) is None:
+        return _err(f"no phase {a.phase!r} in this plan.")
+
+    report = verify.verify(plan, snap, root, task=a.task or "",
+                           phase=a.phase or "", claimed_only=a.claimed_only)
+    now = _now()
+    # No refresh_brief. Four shipped cmd_ bodies call it, so anyone starting
+    # from a copy silently turns a read command into a writer.
+    print(render.verify_json(report, now=now) if a.json
+          else render.verify_screen(plan, report, now=now))
+    return EXIT_CONTRADICTED if report.contradicted else EXIT_OK
 
 
 def cmd_expand(argv: list[str]) -> int:
@@ -906,7 +946,6 @@ NOT_YET = {
     "start": ("P-3", "open a session and print the branch name and commit trailer"),
     "done": ("P-3", "record a self-report, pending merge evidence"),
     "map": ("P-3", "bind a branch to a task, and explain the mapping"),
-    "verify": ("P-5", "check each deliverable: present, missing, or unverifiable"),
     "moderate": ("P-6", "branch hygiene findings with the exact git command for each"),
 }
 
@@ -947,6 +986,7 @@ COMMANDS = {
     "export": cmd_export,
     "next": cmd_next,
     "tree": cmd_tree,
+    "verify": cmd_verify,
     "expand": cmd_expand,
     "explain": cmd_explain,
     "path": cmd_path,
@@ -979,6 +1019,10 @@ HELP = """roadmap - a phased build plan with memory that survives context loss
                         critical path
   roadmap tree [--phase P-n] [--hide-provisional] [--deps]
                         the whole plan; provisional tasks are marked `prov`
+  roadmap verify [T-nn] [--phase P-n] [--claimed-only] [--json]
+                        each deliverable: present · missing · unverifiable ·
+                        unresolvable.  exit 5 if a task claiming done is
+                        missing one. Nothing is ever executed
   roadmap expand <P-n> [--dry-run] [--force]
                         promote a provisional phase into the load-bearing set.
                         Offline, it only clears the flag

@@ -66,6 +66,7 @@ No tree-sitter, no networkx, no network calls. Everything works with no API key.
 | `roadmap next` | the active phase, its gate, the ready tasks and the critical path |
 | `roadmap tree` | the whole plan; provisional tasks marked `prov` |
 | `roadmap expand <P-n>` | promote a provisional phase into the load-bearing set |
+| `roadmap verify [T-nn]` | each deliverable: present · missing · unverifiable · unresolvable. `5` if a claim is contradicted |
 | `roadmap explain <id \| "text">` | one node: source, degree, neighbors tagged EXTRACTED/INFERRED |
 | `roadmap path <a> <b>` | shortest path between two plan/memory nodes |
 | `roadmap query "<question>"` | scoped subgraph for a plain-language question |
