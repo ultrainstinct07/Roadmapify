@@ -187,7 +187,7 @@ def rank(query: str, candidates: "list[tuple[str, str, str]]") -> "list[tuple[st
 #: turn half of every constraint into a banned phrase.
 _PROHIBIT_RE = re.compile(
     r"\b(?:no|never|without|avoid|must\s+not|cannot|can't|do\s+not|don't|"
-    r"forbidden|banned|off\s+the\s+table)\b[:\s]+(.{2,60})",
+    r"forbidden|banned|off\s+the\s+table)\b[:\s]+(.{2,120})",
     re.IGNORECASE,
 )
 
@@ -196,6 +196,30 @@ _PROHIBIT_RE = re.compile(
 #: whole sentence including the thing it prescribes instead.
 _CLAUSE_END_RE = re.compile(
     r"\s*(?:[,;.(]|—|--|\bbut\b|\binstead\b|\bunless\b|\bexcept\b)")
+
+
+#: An enumerated ban item is short and bare. Anything longer, or carrying a
+#: clause word, is prose — most often the alternative the constraint prescribes.
+_ENUM_MAX_TOKENS = 3
+
+#: A ban names its object bare; an article marks prose.
+_ARTICLE_RE = re.compile(r"^(?:a|an|the)\b", re.IGNORECASE)
+
+
+def _enumerated(tail: str) -> "list[str]":
+    """The remaining items of a comma list governed by one prohibition marker."""
+    out: "list[str]" = []
+    for raw in (tail or "").split(","):
+        item = raw.strip()
+        if item.lower().startswith("or "):
+            item = item[3:].strip()
+        item = item.strip(" -\u2013\u2014:.\"'")
+        if not item:
+            continue
+        if _CLAUSE_END_RE.search(item) or not 1 <= len(tokens(item)) <= _ENUM_MAX_TOKENS:
+            break
+        out.append(item)
+    return out
 
 
 def _prohibitions(text: str) -> list[str]:
@@ -213,7 +237,9 @@ def _prohibitions(text: str) -> list[str]:
     while True:
         m = _PROHIBIT_RE.search(body, pos)
         if not m:
-            return out
+            # A marker inside an enumeration is found twice — once by the scan
+            # and once by the expansion. Same ban, so order-preserving dedupe.
+            return list(dict.fromkeys(out))
         phrase = m.group(1)
         # "must never contain: no subprocess, no importlib" — the marker was a
         # PREAMBLE and the real bans follow the colon. Skip past it and rescan,
@@ -223,15 +249,40 @@ def _prohibitions(text: str) -> list[str]:
         colon = phrase.find(":")
         if colon != -1 and colon < (_CLAUSE_END_RE.search(phrase).start()
                                     if _CLAUSE_END_RE.search(phrase) else len(phrase)):
+            # The bans follow the colon either way. Whether the text BEFORE it
+            # is itself a ban depends on whether it says anything: "must never
+            # contain:" is a preamble, but "never executes a deliverable:" is
+            # the rule, and dropping it left the very attack the constraint
+            # exists to stop scoring below the floor.
+            head = phrase[:colon].strip(" -\u2013\u2014:\"'")
+            if len(tokens(head)) >= 2:
+                out.append(head)
             pos = m.start(1) + colon + 1
             continue
         cut = _CLAUSE_END_RE.search(phrase)
         end = m.start(1) + (cut.start() if cut else len(phrase))
-        if cut:
-            phrase = phrase[: cut.start()]
-        phrase = phrase.strip(" -\u2013\u2014:\"'")
-        if phrase:
-            out.append(phrase)
+        head = phrase[: cut.start()] if cut else phrase
+        head = head.strip(" -\u2013\u2014:\"'")
+        # "the LLM pass is a refinement, never a requirement" is a predicate
+        # nominative, not a ban. A real prohibition names its object bare:
+        # "no networkx", "never write a git ref". An article means prose.
+        if _ARTICLE_RE.match(head):
+            pos = max(m.start(1) + len(head or " "), m.start(1) + 1)
+            continue
+        if head:
+            out.append(head)
+            # "no branch, checkout, switch, rebase, merge, push, reset" is ONE
+            # marker governing an enumeration. Without this the list collapsed
+            # to its first item, so C-dzha banned the ordinary noun "branch"
+            # and let `git push` through — over- and under-blocking at once.
+            # Only short bare items are taken: "use cron instead" is the
+            # alternative a constraint PRESCRIBES, not another ban.
+            # ONLY when the clause ended on a comma: that is what makes the head
+            # the first item of an enumeration. An em-dash or a "but" ends the
+            # ban and begins prose, and expanding across it swallows the next
+            # prohibition whole.
+            if cut and phrase[cut.start():cut.start() + 1] == ",":
+                out.extend(_enumerated(phrase[cut.start() + 1:]))
         pos = max(end, m.start(1) + 1)
 
 
@@ -448,3 +499,28 @@ def nearest(word: str, candidates, max_distance: int = 2) -> "str | None":
     if scored and scored[0][0] <= max_distance:
         return scored[0][1]
     return None
+
+
+def vocabulary(texts: "list[str]") -> set[str]:
+    """The words a project builds WITH — minus the words it forbids.
+
+    A one-word ban is only safe on a term that is foreign to the project.
+    "networkx" is foreign; "branch" is this project's own subject matter, and
+    banning it blocked `bind a branch to a task, and explain the mapping` —
+    which is the shipped description of `roadmap map`.
+
+    Corpus frequency cannot tell those apart: in a sixty-document corpus both
+    are rare. What separates them is that one appears in the plan's own labels
+    and intents and the other does not.
+
+    Each text's own prohibitions are removed before its words count as
+    vocabulary, or naming a ban would retire it — T-10's intent reads "stdlib
+    graphlib; no networkx", which would otherwise make networkx unbannable.
+    """
+    out: "set[str]" = set()
+    for text in texts:
+        banned: "set[str]" = set()
+        for phrase in _prohibitions(text):
+            banned |= tokens(phrase)
+        out |= tokens(text) - banned
+    return out

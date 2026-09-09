@@ -335,10 +335,24 @@ def cmd_check(argv: list[str]) -> int:
     ubiquitous = textmatch.corpus_stopwords(corpus)
     approach = textmatch.strip_tokens(a.approach, ubiquitous) or a.approach
 
-    # The mirror of `ubiquitous`: terms this project names exactly once. A
+    # The mirror of `ubiquitous`: terms this project names rarely. A
     # constraint's one-word bans ("no networkx") are only enforceable for these,
-    # because a word used elsewhere in the plan is a category, not an artefact.
+    # because a word used elsewhere is a category, not an artefact.
+    #
+    # And never a word the PLAN builds with. Corpus frequency cannot separate
+    # "networkx" from "branch" — in a sixty-record corpus both are rare — so
+    # C-dzha's "no branch, checkout, ..." blocked `bind a branch to a task, and
+    # explain the mapping`, which is this CLI's own shipped description of
+    # `roadmap map`. The plan's labels and intents say what we are building;
+    # nothing in them can be banned by a single word.
     distinctive = textmatch.distinctive_terms(corpus)
+    plan = load_plan(root)
+    if plan is not None:
+        distinctive -= textmatch.vocabulary(
+            [plan.goal.label, plan.goal.statement or "", plan.goal.why]
+            + [f"{x.label} {x.intent or ''} {x.ships or ''} "
+               f"{x.exit_criteria or ''} {x.demo or ''}" for x in plan.phases]
+            + [f"{t.label} {t.intent or ''}" for t in plan.tasks])
 
     rej_scored = textmatch.rank(
         approach,

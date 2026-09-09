@@ -279,3 +279,56 @@ def test_a_colon_free_prohibition_is_unchanged():
         "no interactive OAuth — an integration token in the env only"
     ) == ["interactive OAuth"]
     assert tm.prohibited_phrases("must work with no API key") == ["API key"]
+
+
+def test_one_marker_governs_a_whole_enumeration_of_bans():
+    """"no branch, checkout, switch, rebase, merge, push, reset" is one marker
+    over seven bans. Collapsing it to the first item made the gate wrong in both
+    directions at once: it banned the ordinary noun "branch" — blocking this
+    CLI's own description of `roadmap map` — while letting `git push` and
+    `git checkout`, the things the rule exists to forbid, through at exit 0."""
+    text = ("never write a git ref — no branch, checkout, switch, rebase, "
+            "merge, push, reset, or git config write")
+    assert tm.prohibited_terms(text) == [
+        "branch", "checkout", "switch", "rebase", "merge", "push", "reset"]
+    assert "git config write" in tm.prohibited_phrases(text)
+
+
+def test_an_enumeration_stops_at_the_alternative_a_constraint_prescribes():
+    """A constraint's own words include the thing it wants instead. "use cron
+    instead" is the prescription, not a second ban, and taking it would forbid
+    the remedy."""
+    assert tm.prohibited_phrases(
+        "never use a background daemon, use cron instead") == [
+        "use a background daemon"]
+
+
+def test_a_predicate_nominative_is_not_a_prohibition():
+    """"the LLM pass is a refinement, never a requirement" bans nothing. Read as
+    a ban it made "requirement" an enforceable one-word prohibition, which would
+    block any proposal that used the word."""
+    assert tm.prohibited_terms(
+        "the LLM pass is a refinement, never a requirement") == []
+
+
+def test_a_colon_keeps_a_head_that_says_something_and_drops_one_that_does_not():
+    """"must never contain:" is a preamble. "never executes a deliverable:" is
+    the rule itself, and dropping it left the exact attack that constraint
+    exists to stop scoring below the blocking floor."""
+    assert "executes a deliverable" in tm.prohibited_phrases(
+        "roadmap verify never executes a deliverable: no subprocess, no shell")
+    assert "contain" not in " ".join(tm.prohibited_phrases(
+        "the primitives must never contain: no subprocess, no eval"))
+
+
+def test_the_vocabulary_a_project_builds_with_excludes_what_it_forbids():
+    """A one-word ban is only safe on a term foreign to the project. Corpus
+    frequency cannot separate "networkx" from "branch" — in a small corpus both
+    are rare — so the plan's own labels decide. And a plan that NAMES a ban
+    ("stdlib graphlib; no networkx") must not thereby retire it."""
+    vocab = tm.vocabulary([
+        "Read-only git plumbing and branch mapping",
+        "Derive status, ready tasks and the critical path: stdlib graphlib; no networkx",
+    ])
+    assert "branch" in vocab, "the project's own subject matter"
+    assert "networkx" not in vocab, "naming a ban must not retire it"
