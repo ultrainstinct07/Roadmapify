@@ -388,34 +388,28 @@ def test_verify_writes_nothing_at_all(seeded, run):
     assert before == after
 
 
-def test_the_package_contains_no_process_spawning_primitive():
-    """The cheapest possible enforcement of the whole no-execution policy, and
-    the same trick P-6's T-19 will use for mutating git verbs. It lives here so
-    it fails in the review that would introduce the first one."""
+def test_verify_itself_never_spawns_a_process_or_imports_repo_code():
+    """Narrowed from a package-wide scan when P-3 shipped the one module that
+    may invoke git. tests/test_gitsync.py now carries the package-wide rule with
+    a subcommand allowlist, which is strictly stronger; this keeps the tighter
+    promise verify makes about itself, where the input is attacker-supplied."""
     import ast as _ast
 
-    BANNED_MODULES = {"subprocess", "commands", "pty"}
-    # `compile` is deliberately absent: re.compile is everywhere and harmless,
-    # and the dangerous builtin is only reachable through eval/exec, which are
-    # banned. A guard with a false positive gets deleted, not fixed.
-    BANNED_CALLS = {"system", "popen", "spawn", "spawnv", "execv", "execve",
-                    "import_module", "eval", "exec"}
-    pkg = Path(verify.__file__).parent
-    for mod in sorted(pkg.glob("*.py")):
-        tree = _ast.parse(mod.read_text(encoding="utf-8"))
-        for node in _ast.walk(tree):
-            if isinstance(node, _ast.Import):
-                for alias in node.names:
-                    assert alias.name.split(".")[0] not in BANNED_MODULES, \
-                        f"{mod.name} imports {alias.name}"
-            elif isinstance(node, _ast.ImportFrom):
-                assert (node.module or "").split(".")[0] not in BANNED_MODULES, \
-                    f"{mod.name} imports from {node.module}"
-            elif isinstance(node, _ast.Call):
-                fn = node.func
-                name = (fn.attr if isinstance(fn, _ast.Attribute)
-                        else fn.id if isinstance(fn, _ast.Name) else "")
-                assert name not in BANNED_CALLS, f"{mod.name} calls {name}()"
+    banned_modules = {"subprocess", "commands", "pty", "multiprocessing"}
+    banned_calls = {"system", "popen", "spawn", "execv", "import_module",
+                    "eval", "exec", "__import__"}
+    tree = _ast.parse(Path(verify.__file__).read_text(encoding="utf-8"))
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            for alias in node.names:
+                assert alias.name.split(".")[0] not in banned_modules
+        elif isinstance(node, _ast.ImportFrom):
+            assert (node.module or "").split(".")[0] not in banned_modules
+        elif isinstance(node, _ast.Call):
+            fn = node.func
+            name = (fn.attr if isinstance(fn, _ast.Attribute)
+                    else fn.id if isinstance(fn, _ast.Name) else "")
+            assert name not in banned_calls, f"verify.py calls {name}()"
 
 
 def test_nothing_in_verify_reads_the_clock():

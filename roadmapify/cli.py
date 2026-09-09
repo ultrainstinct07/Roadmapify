@@ -14,7 +14,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from roadmapify import journal, render, templates, textmatch, verify
+from roadmapify import gitsync, journal, render, templates, textmatch, verify
 from roadmapify.paths import (
     BRIEF_FILENAME,
     LockBusy,
@@ -849,6 +849,34 @@ def _lost_lines(disk: str, emitted: str) -> "list[str]":
         if ln.startswith("-") and not ln.startswith("---")]
 
 
+def cmd_sync(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="roadmap sync")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true")
+    p.add_argument("--root", default=None)
+    a = p.parse_args(argv)
+    root = Path(a.root).resolve() if a.root else project_root()
+    plan = load_plan(root)
+    if plan is None:
+        return _err('no roadmap.toml here — run `roadmap init "<goal>"` first')
+
+    observed = gitsync.facts(root)
+    records = ()
+    added = []
+    dropped = ()
+    proposals = {}
+    if observed.ok:
+        mine = gitsync.identity_email(observed.identity)
+        records = gitsync.records_from(observed, plan, mine=mine)
+        dropped = gitsync.dropped_ids(observed, plan)
+        proposals = gitsync.proposals(observed, plan)
+        if not a.dry_run:
+            added = gitsync.append_new(root, records)
+            refresh_brief(root)
+    print(render.sync_screen(observed, records, added, dropped=dropped,
+                             proposals=proposals, dry_run=a.dry_run, now=_now()))
+    return EXIT_OK if observed.ok else EXIT_ERROR
+
+
 def cmd_verify(argv: list[str]) -> int:
     p = argparse.ArgumentParser(prog="roadmap verify")
     p.add_argument("task", nargs="?", metavar="T-nn",
@@ -956,7 +984,6 @@ def cmd_expand(argv: list[str]) -> int:
 
 
 NOT_YET = {
-    "sync": ("P-3", "read git and derive task status from real commits"),
     "start": ("P-3", "open a session and print the branch name and commit trailer"),
     "done": ("P-3", "record a self-report, pending merge evidence"),
     "map": ("P-3", "bind a branch to a task, and explain the mapping"),
@@ -1001,6 +1028,7 @@ COMMANDS = {
     "next": cmd_next,
     "tree": cmd_tree,
     "verify": cmd_verify,
+    "sync": cmd_sync,
     "expand": cmd_expand,
     "explain": cmd_explain,
     "path": cmd_path,
@@ -1033,6 +1061,9 @@ HELP = """roadmap - a phased build plan with memory that survives context loss
                         critical path
   roadmap tree [--phase P-n] [--hide-provisional] [--deps]
                         the whole plan; provisional tasks are marked `prov`
+  roadmap sync [--dry-run]
+                        read git and record what it says about each task.
+                        Reads only: it never writes a git ref
   roadmap verify [T-nn] [--phase P-n] [--claimed-only] [--json]
                         each deliverable: present · missing · unverifiable ·
                         unresolvable.  exit 5 if a task claiming done is

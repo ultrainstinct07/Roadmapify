@@ -58,7 +58,6 @@ intent = "Derive status from real commits; start scoring our own divergence"
 ships = "`roadmap next` prints agreement and coverage on line 2"
 exit_criteria = "task status flips from evidence alone, never from a stored field"
 demo = "commit on a branch, watch the status move"
-provisional = true
 
 [[phase]]
 id = "P-4"
@@ -325,14 +324,24 @@ origin = "human"
 id = "T-12"
 label = "Read-only git plumbing and branch mapping"
 phase = "P-3"
-provisional = true
+intent = "one spawner, the literal git, a read-only subcommand, an argv of literals"
+depends_on = ["T-10"]
+produces = [
+    "file:roadmapify/gitsync.py",
+    "test:tests/test_gitsync.py",
+]
 origin = "human"
 
 [[task]]
 id = "T-13"
 label = "Coverage and agreement scoring"
 phase = "P-3"
-provisional = true
+intent = "coverage and agreement, pure, computed from facts already in hand"
+depends_on = ["T-12"]
+produces = [
+    "file:roadmapify/score.py",
+    "test:tests/test_score.py",
+]
 origin = "human"
 
 [[task]]

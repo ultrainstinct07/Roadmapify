@@ -54,6 +54,7 @@ table cannot drift from the code.
 | `journal.py` | `KINDS`, `record`, `append`, `load`, `rejections`, `open_sessions`, `superseded_ids`, `make_id`, `new_session_id`, `sanitize`, `parse_rejection` | the memory log: content-hashed records, first-class rejections, the crash flag |
 | `textmatch.py` | `tokens`, `similarity`, `coverage`, `proposal_score`, `constraint_score`, `prohibited_phrases`, `prohibited_terms`, `rare_tokens`, `distinctive_terms`, `rank`, `best`, `nearest`, `edit_distance`, `MATCH_FLOOR`, `RELATED_FLOOR`, `SINGLE_TERM_WEIGHT` | deterministic matching for the `check` gate and (later) branch↔task mapping |
 | `project.py` | `project`, `write_graph`, `load_graph`, `to_json`, `Graph`, `Node`, `Edge`, `Hyperedge`, `CycleError`, `dependents`, `unblocks`, `task_dag`, `node_id` | plan + journal → graphify-shaped `graph.json` (no networkx) |
+| `gitsync.py` | `facts`, `probe`, `scrubbed_env`, `identity_email`, `parse_history`, `parse_files`, `parse_refs`, `task_ids`, `trailer_tasks`, `reachable`, `descendants`, `merge_payload`, `trunk_ref`, `map_branch`, `records_from`, `proposals`, `dropped_ids`, `evidence_id`, `make`, `load_evidence`, `append_new`, `Facts`, `Commit`, `Ref`, `Mapping`, `GIT_READ_SUBCOMMANDS` | git → evidence records. The only module that spawns a process, and only the literal `git` with a read-only subcommand and an argv of string literals |
 | `status.py` | `snapshot`, `status_of`, `ready_tasks`, `active_phase`, `phase_status`, `critical_path`, `remaining_path`, `load_evidence`, `normalize_evidence`, `Snapshot`, `TaskStatus`, `PhaseStatus`, `STATUSES`, `DONE_STATES`, `EVIDENCE_KINDS`, `LABEL` | (plan, evidence, now) → derived status, ready tasks and the critical path. stdlib `graphlib`; nothing is stored |
 | `verify.py` | `verify`, `resolve`, `resolve_spec`, `anchor`, `in_scope`, `Report`, `Resolution`, `TaskVerification`, `VERDICTS`, `METHODS`, `FINDINGS`, `PRESENT`, `MISSING`, `UNVERIFIABLE`, `UNRESOLVABLE`, `PRUNE_DIRS`, `GLOB_MATCH_CAP`, `GLOB_CANDIDATE_CAP`, `AST_BYTE_CAP` | (plan, snapshot, working tree) → what the plan promised versus what is on disk. Stats, globs and `ast.parse`; never executes, never writes |
 | `traverse.py` | `explain`, `shortest_path`, `query`, `explain_screen`, `path_screen`, `query_screen`, `ensure_graph`, `resolve_node` | stdlib BFS/DFS over `graph.json` |
@@ -65,7 +66,7 @@ table cannot drift from the code.
 | `cli.py` | `dispatch`, `COMMANDS`, `NOT_YET`, `refresh_brief`, `EXIT_REJECTED`, `EXIT_CONSTRAINT`, `EXIT_NOT_YET` | argv → exit code |
 | `__main__.py` | `main` | console entry point |
 
-Not yet built (see the build plan): `gitsync.py`,
+Not yet built (see the build plan): `score.py`,
 `moderate.py`, `llm.py`, and the session hook half of `install.py`.
 
 ## Exit codes

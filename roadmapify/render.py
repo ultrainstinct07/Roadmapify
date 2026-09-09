@@ -764,3 +764,75 @@ def verify_json(report, *, now: datetime) -> str:
                          sorted(report.resolutions, key=lambda r: r.spec)],
     }
     return json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+# ── sync ──────────────────────────────────────────────────────────────────────
+
+_GIT_REASON = {
+    "no-git": "git is not on PATH",
+    "not-a-repo": "this is not a git repository",
+    "empty": "the repository has no commits yet",
+    "elsewhere": "the git repository is not rooted at the project root",
+    "timeout": "git did not answer in time — the result is unknown, not empty",
+    "parse": "git's output could not be parsed; no partial result was taken",
+    "unreadable": "git could not be read",
+}
+
+
+def sync_screen(facts, records, added, *, dropped=(), proposals=None,
+                dry_run=False, now=None) -> str:
+    """Pure. What git says, what was recorded, and what could not be attributed."""
+    proposals = proposals or {}
+    L = [bold("roadmap sync")]
+    if not facts.ok:
+        L.append(yellow(f"  {_GIT_REASON.get(facts.reason, facts.reason)}"))
+        if facts.reason == "elsewhere":
+            L.append(dim(f"  git says {facts.toplevel}"))
+        L.append(dim("  no evidence was recorded, and nothing reads as done."))
+        return "\n".join(x.rstrip() for x in L)
+
+    where = f"{facts.branch or 'detached HEAD'}"
+    from roadmapify import gitsync as _g
+    L.append(dim(f"  {len(facts.commits)} commits observed on {where} · "
+                 f"trunk {_g.trunk_ref(facts) or '—'}"))
+    if facts.shallow:
+        L.append(yellow("  shallow clone — history is truncated, so coverage is a "
+                        "floor, not a measurement"))
+    if facts.truncated:
+        L.append(yellow(f"  history truncated at {len(facts.commits)} commits"))
+
+    declared = len({r["ref"] for r in records})
+    L += ["", f"  {dim('attributed')}   {len(records)} record"
+              f"{'s' if len(records) != 1 else ''} from {declared} commit"
+              f"{'s' if declared != 1 else ''} carrying a `Roadmap:` trailer"]
+    L.append(f"  {dim('new')}          {len(added)}"
+             + (dim("   (nothing to add — sync is idempotent)") if not added else ""))
+    unattributed = len(facts.commits) - declared
+    if unattributed:
+        L.append(f"  {dim('unattributed')} {unattributed} commit"
+                 f"{'s' if unattributed != 1 else ''} "
+                 f"{'name' if unattributed != 1 else 'names'} no task")
+
+    for rec in added[:10]:
+        L.append(f"    {green(rec['id'])}  {rec['kind']:6} {rec['task']}  "
+                 f"{rec['ref'][:8]}  {dim(rec['confidence'])}"
+                 + (dim("  foreign") if rec.get("trust") == "foreign" else ""))
+    if len(added) > 10:
+        L.append(dim(f"    … and {len(added) - 10} more"))
+
+    if dropped:
+        L += ["", yellow("  trailers naming a task this plan does not have:")]
+        for sha, tid in dropped[:6]:
+            L.append(dim(f"    {sha[:8]}  {tid}"))
+
+    if proposals:
+        L += ["", dim(f"  {len(proposals)} commit(s) touched files a task uniquely "
+                      "declares. Those are"),
+              dim("  proposals, not evidence, and nothing was recorded from them:")]
+        for sha, tids in list(proposals.items())[:5]:
+            L.append(dim(f"    {sha[:8]}  {' '.join(tids[:5])}"))
+        L.append(dim("  put `Roadmap: T-nn` in the commit message to make it evidence."))
+
+    if dry_run:
+        L += ["", dim("--dry-run: nothing was written.")]
+    return "\n".join(x.rstrip() for x in L)
