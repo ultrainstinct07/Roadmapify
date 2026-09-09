@@ -215,6 +215,16 @@ def _prohibitions(text: str) -> list[str]:
         if not m:
             return out
         phrase = m.group(1)
+        # "must never contain: no subprocess, no importlib" — the marker was a
+        # PREAMBLE and the real bans follow the colon. Skip past it and rescan,
+        # rather than emitting "contain" as a ban and silently dropping the
+        # first real one, which is how the commonest way of writing a list of
+        # prohibitions left its first item unenforced.
+        colon = phrase.find(":")
+        if colon != -1 and colon < (_CLAUSE_END_RE.search(phrase).start()
+                                    if _CLAUSE_END_RE.search(phrase) else len(phrase)):
+            pos = m.start(1) + colon + 1
+            continue
         cut = _CLAUSE_END_RE.search(phrase)
         end = m.start(1) + (cut.start() if cut else len(phrase))
         if cut:

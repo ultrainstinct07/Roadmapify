@@ -257,3 +257,25 @@ def test_a_term_this_project_says_constantly_is_not_enforceable_as_a_one_word_ba
     corpus = [f"the roadmap tracks {w}" for w in
               ("phases", "tasks", "memory", "journal", "graph", "briefs", "plans")]
     assert "roadmap" not in tm.distinctive_terms(corpus)
+
+
+def test_a_prohibition_preamble_does_not_swallow_the_first_ban_in_the_list():
+    """"must never contain: no subprocess, no importlib" is the commonest way a
+    constraint states a list of bans, and the marker before the colon is a
+    preamble, not the ban. Capturing across it turned the first item into the
+    two-token phrase "contain: no subprocess" — which scored 0.475, below the
+    floor — so the FIRST ban in every such list was silently unenforced while
+    the rest blocked. The gate answered two different ways about one mechanism."""
+    text = ("the execution primitives verify must never contain: "
+            "no subprocess, no importlib, no popen, no eval")
+    assert tm.prohibited_terms(text) == ["subprocess", "importlib", "popen", "eval"]
+    assert "contain" not in " ".join(tm.prohibited_phrases(text)), \
+        "the preamble verb must never itself become a ban"
+
+
+def test_a_colon_free_prohibition_is_unchanged():
+    """The preamble rule must not disturb the ordinary shapes."""
+    assert tm.prohibited_phrases(
+        "no interactive OAuth — an integration token in the env only"
+    ) == ["interactive OAuth"]
+    assert tm.prohibited_phrases("must work with no API key") == ["API key"]
