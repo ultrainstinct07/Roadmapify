@@ -116,14 +116,25 @@ def coverage(phrase: str, text: str) -> float:
     return len(tp & tt) / len(tp)
 
 
+#: The weakest containment can be worth, at maximum length imbalance.
+_CONTAINMENT_FLOOR = 0.55
+
+
 def score(query: str, candidate: str) -> float:
     """General similarity, used where neither side is a short label.
 
-    ``max(jaccard, containment × 0.9)``: containment is discounted so a two-word
-    query cannot fully saturate the score against a long paragraph, which is the
-    main false-positive shape.
+    ``max(jaccard, containment × d)``, where the discount ``d`` falls as the two
+    sides diverge in length. A flat discount was not enough: a long constraint
+    contains a short proposal's whole vocabulary almost by construction, so
+    "run git for-each-ref to list branches read-only" scored 0.85 against a
+    sixty-token constraint that merely uses the words git, ref and branch
+    somewhere. The longer the candidate is relative to the query, the less its
+    containing that query says.
     """
-    return max(similarity(query, candidate), containment(query, candidate) * 0.9)
+    ta, tb = tokens(query), tokens(candidate)
+    ratio = (min(len(ta), len(tb)) / max(len(ta), len(tb))) if ta and tb else 0.0
+    discount = _CONTAINMENT_FLOOR + (0.9 - _CONTAINMENT_FLOOR) * ratio
+    return max(similarity(query, candidate), containment(query, candidate) * discount)
 
 
 def proposal_score(query: str, phrase: str, context: str = "") -> float:

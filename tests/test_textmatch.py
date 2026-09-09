@@ -332,3 +332,26 @@ def test_the_vocabulary_a_project_builds_with_excludes_what_it_forbids():
     ])
     assert "branch" in vocab, "the project's own subject matter"
     assert "networkx" not in vocab, "naming a ban must not retire it"
+
+
+def test_a_long_constraint_does_not_swallow_a_short_unrelated_proposal():
+    """Containment divides by the shorter side, so a sixty-token constraint
+    contains a short proposal's whole vocabulary almost by construction. A flat
+    0.9 discount left "run git for-each-ref to list branches read-only" scoring
+    0.85 against a constraint that merely uses the words git, ref and branch
+    somewhere — a legitimate read-only proposal blocked by a rule about writes."""
+    long_constraint = (
+        "roadmapify never runs a git verb that writes: no git checkout, no git "
+        "rebase, no git push, no git reset, no git config, no ref update, no ref "
+        "deletion; and it never wraps git in a library: no GitPython, no dulwich")
+    assert tm.score("run git for-each-ref to list branches read-only",
+                    long_constraint) < tm.MATCH_FLOOR
+    assert tm.score("run git push after recording the merge",
+                    long_constraint) >= tm.RELATED_FLOOR
+
+
+def test_containment_still_catches_a_short_restatement_of_a_short_record():
+    """The discount must not retire containment itself: a short proposal against
+    a similarly short record is the case it exists for."""
+    assert tm.score("use redis for the cache",
+                    "redis as the dedupe cache") >= tm.MATCH_FLOOR
