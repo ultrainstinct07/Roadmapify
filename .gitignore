@@ -10,11 +10,13 @@ __pycache__/
 .pyright/
 .hypothesis/
 .cache/
+.uv-cache/
 
 # Coverage / tox
 .coverage
 .coverage.*
 coverage.xml
+coverage.json
 htmlcov/
 .tox/
 .nox/
@@ -27,14 +29,17 @@ wheels/
 *.egg-info/
 .eggs/
 .venv/
+.venv-*/
 venv/
 ENV/
 env/
+__pypackages__/
 
 # Editors / OS
 .idea/
 .vscode/
 *.swp
+*.swo
 *~
 .DS_Store
 Thumbs.db
@@ -43,6 +48,21 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+!.env.*.example
+!.env.sample
+!.env.template
+
+# Local exports at the repository root. Keep packaged HTML, review templates,
+# Graphify fixtures and documentation artwork trackable.
+/roadmap.html
+/goal.html
+
+# Interrupted roadmapify atomic writes (the destination may be outside roadmap-out).
+.rmap-*.tmp
+
+# The marked block also ignores goal.html, .roadmap.lock and .goal-run.json.
+# Goal-run state is local but needed for recovery: ignored does not mean safe
+# to delete while an agent host owns a step.
 
 # >>> roadmapify >>>
 # Derived and disposable. The two append-only logs below are the durable

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import re
 import socket
@@ -86,17 +87,16 @@ def now_iso() -> str:
 
 
 def make_id(kind: str, text: str, ts: str, author: str) -> str:
-    """``<prefix>-<4 chars of base32(sha256(text|ts|author))>``.
+    """Typed prefix plus a 130-bit base32 digest of canonical record content.
 
-    Lowercase base32 without padding: unambiguous to read aloud, safe in a
-    filename, and short enough to retype. 4 chars over the alphabet is ~1M
-    values, which for the number of decisions one project records is comfortable;
-    ``append`` resolves the residual collision by extending the digest.
+    The record builder includes rationale, relationships and rejections in the
+    canonical text. Existing short IDs remain readable; ambiguous legacy
+    collisions are preserved and quarantined by load().
     """
     prefix = _PREFIX.get(kind, "N")
     digest = hashlib.sha256(f"{text}|{ts}|{author}".encode("utf-8")).digest()
     body = base64.b32encode(digest).decode("ascii").lower().rstrip("=")
-    return f"{prefix}-{body[:4]}"
+    return f"{prefix}-{body[:26]}"
 
 
 def _author() -> str:
@@ -183,6 +183,9 @@ def record(
     for k, v in (extra or {}).items():
         if v is not None and k not in rec:
             rec[k] = v
+    payload = json.dumps({k: v for k, v in rec.items() if k != "id"},
+                         sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    rec["id"] = make_id(kind, payload, ts, author)
     return rec
 
 
@@ -197,13 +200,23 @@ def load(root: "str | Path | None" = None) -> list[dict]:
     both contain a shared ancestor's lines yields duplicates, and content-hashed
     ids make those duplicates provably identical.
     """
-    seen: dict[str, dict] = {}
+    groups: dict[str, dict[str, dict]] = {}
     for rec in read_jsonl(journal_path(root)):
         rid = rec.get("id")
         if not isinstance(rid, str) or rec.get("kind") not in KINDS:
             continue
-        seen.setdefault(rid, rec)
-    return sorted(seen.values(), key=lambda r: (r.get("ts", ""), r.get("id", "")))
+        payload = json.dumps(rec, sort_keys=True, separators=(",", ":"))
+        groups.setdefault(rid, {})[payload] = rec
+    result = []
+    for rid, variants in groups.items():
+        for payload, rec in sorted(variants.items()):
+            if len(variants) > 1:
+                # Preserve both observations, quarantine ambiguous authority.
+                digest = hashlib.sha256(payload.encode()).hexdigest()[:32]
+                rec = {**rec, "id": rid + "-" + digest,
+                       "original_id": rid, "trust": "conflict"}
+            result.append(rec)
+    return sorted(result, key=lambda r: (r.get("ts", ""), r["id"]))
 
 
 def append(rec: dict, root: "str | Path | None" = None) -> dict:
@@ -212,9 +225,8 @@ def append(rec: dict, root: "str | Path | None" = None) -> dict:
     existing = {r.get("id"): r for r in read_jsonl(path)}
     rid = rec["id"]
     if rid in existing and existing[rid] != rec:
-        digest = hashlib.sha256(
-            f"{rec['text']}|{rec['ts']}|{rec['author']}".encode("utf-8")
-        ).digest()
+        digest = hashlib.sha256(json.dumps(
+            rec, sort_keys=True, separators=(",", ":")).encode()).digest()
         body = base64.b32encode(digest).decode("ascii").lower().rstrip("=")
         for n in range(5, len(body)):
             candidate = f"{rid[:2]}{body[:n]}"
@@ -253,7 +265,7 @@ def rejections(records: "list[dict] | None" = None,
 
 def superseded_ids(records: list[dict]) -> set[str]:
     """Ids that some later record explicitly reversed."""
-    return {r["supersedes"] for r in records if r.get("supersedes")}
+    return memory_state(records)["superseded"]
 
 
 def open_sessions(records: "list[dict] | None" = None,
@@ -265,8 +277,9 @@ def open_sessions(records: "list[dict] | None" = None,
     write anything else.
     """
     recs = load(root) if records is None else records
-    closed = {r.get("session") for r in recs if r.get("kind") == "session_close"}
-    return [r for r in recs if r.get("kind") == "session_open" and r["id"] not in closed]
+    admitted = memory_state(recs)["admitted"]
+    closed = {r.get("session") for r in recs if r.get("kind") == "session_close" and r["id"] in admitted}
+    return [r for r in recs if r.get("kind") == "session_open" and r["id"] in admitted and r["id"] not in closed]
 
 
 def new_session_id(ts: str, intent: str = "") -> str:
@@ -274,3 +287,28 @@ def new_session_id(ts: str, intent: str = "") -> str:
     host = socket.gethostname()
     digest = hashlib.sha256(f"{host}|{os.getpid()}|{ts}|{intent}".encode("utf-8")).digest()
     return "S-" + base64.b32encode(digest).decode("ascii").lower()[:6]
+
+
+def memory_state(records: list[dict]) -> dict:
+    """Resolve authority once. Only local acceptance observations grant trust.
+
+    Supersession is durable: retiring a replacement does not resurrect its
+    predecessor. Foreign transitions have no effect until locally accepted.
+    Missing trust is supported for legacy local journal records only.
+    """
+    local = {r["id"] for r in records if r.get("trust", TRUST_LOCAL) == TRUST_LOCAL}
+    locally_retired = {r["supersedes"] for r in records if r["id"] in local
+                       and isinstance(r.get("supersedes"), str) and r["supersedes"] != r["id"]}
+    accepted = {r["accepted"] for r in records
+                if r["id"] in local - locally_retired and isinstance(r.get("accepted"), str)}
+    admitted = local | {r["id"] for r in records
+                        if r.get("trust") == TRUST_FOREIGN and r["id"] in accepted}
+    superseded = {r["supersedes"] for r in records
+                  if r["id"] in admitted and isinstance(r.get("supersedes"), str)
+                  and r["supersedes"] != r["id"]}
+    active = admitted - superseded
+    return {"accepted": accepted, "admitted": admitted, "superseded": superseded,
+            "active": active,
+            "records": [r for r in records if r["id"] in active],
+            "informational": [r for r in records if r["id"] not in admitted],
+            "rejections": [x for x in rejections(records) if x["parent"] in active]}

@@ -431,11 +431,14 @@ def _records_section(title: str, items: list[str], note: str = "") -> str:
 def to_html(plan, records: list[dict], rejections: list[dict], *,
             now: datetime, project: str = "") -> str:
     """Render the whole roadmap as one self-contained page. Pure: no I/O, no clock."""
-    superseded = {r["supersedes"] for r in records if r.get("supersedes")}
-    local = [r for r in records if r.get("trust") != TRUST_FOREIGN]
+    from roadmapify.journal import memory_state
+    memory = memory_state(records)
+    superseded = memory["superseded"]
+    local = memory["records"]
 
     def of(kind: str) -> list[dict]:
-        return [r for r in local if r.get("kind") == kind]
+        return [r for r in (records if kind == "decision" else local)
+                if r.get("kind") == kind and r["id"] in memory["admitted"]]
 
     dependents = _dependents(plan)
     frees = _unblocks(plan, dependents)
@@ -460,8 +463,7 @@ def to_html(plan, records: list[dict], rejections: list[dict], *,
             f'<div class="tasks">{cards}</div></section>'
         )
 
-    live_rejections = [x for x in rejections
-                       if x.get("trust") != TRUST_FOREIGN and x["parent"] not in superseded]
+    live_rejections = memory["rejections"]
     rej_items = [
         f'<div class="rec rejection"><div class="rec-head">'
         f'<span class="rid">{_E(x["id"])}</span>'

@@ -54,7 +54,7 @@ _SAFE_CONFIG = (
 
 #: A Roadmap trailer anywhere in the message, not only in the final block.
 TRAILER_LINE_RE = re.compile(r"^[ \t]*Roadmap:[ \t]*(.+)$", re.MULTILINE)
-_TASK_RE = re.compile(r"\bT-(\d{1,6})\b", re.IGNORECASE)
+_TASK_RE = re.compile(r"\bT-([0-9a-z]{1,6})(?![0-9a-z])", re.IGNORECASE)
 
 REASON_OK = ""
 REASON_NO_GIT = "no-git"
@@ -314,8 +314,8 @@ def task_ids(text: str) -> "tuple[str, ...]":
     """Every T-nn in `text`, normalised. `t-9` -> ('T-09',)."""
     seen = []
     for m in _TASK_RE.finditer(text or ""):
-        n = m.group(1).lstrip("0") or "0"
-        tid = f"T-{int(n):02d}"
+        n = m.group(1).lower()
+        tid = f"T-{int(n):02d}" if n.isdigit() else f"T-{n}"
         if tid not in seen:
             seen.append(tid)
     return tuple(seen)
@@ -573,7 +573,7 @@ def map_branch(name: str, plan, *, allow_matcher: bool = False) -> Mapping:
 
 # ── records ───────────────────────────────────────────────────────────────────
 
-def evidence_id(kind: str, task: str, ref: str, confidence: str) -> str:
+def evidence_id(kind: str, task: str, ref: str, confidence: str, trust: str = "local") -> str:
     """Content-hashed on what identifies the OBSERVATION, never on when it was
     observed.
 
@@ -583,9 +583,9 @@ def evidence_id(kind: str, task: str, ref: str, confidence: str) -> str:
     recomputes the same ids and appends nothing.
     """
     digest = hashlib.sha256(
-        f"{kind}|{task}|{ref}|{confidence}".encode("utf-8")).digest()
+        f"{kind}|{task}|{ref}|{confidence}|{trust}".encode("utf-8")).digest()
     body = base64.b32encode(digest).decode("ascii").lower().rstrip("=")
-    return f"E-{body[:6]}"
+    return f"E-{body[:26]}"
 
 
 def make(kind: str, task: str, *, ts: str, confidence: str = "declared",
@@ -594,7 +594,7 @@ def make(kind: str, task: str, *, ts: str, confidence: str = "declared",
          note: str = "") -> dict:
     """One evidence record in the shape status.py already consumes."""
     return {
-        "id": evidence_id(kind, task, ref, confidence),
+        "id": evidence_id(kind, task, ref, confidence, trust),
         "ts": ts,
         "kind": kind,
         "task": task,
@@ -609,7 +609,7 @@ def make(kind: str, task: str, *, ts: str, confidence: str = "declared",
     }
 
 
-def records_from(facts_: Facts, plan, *, mine: str = "") -> "tuple[dict, ...]":
+def records_from(facts_: Facts, plan, *, mine: str = "", associations=()) -> "tuple[dict, ...]":
     """Every DECLARED record this history supports, sorted by (ts, id).
 
     Pure given `facts_`. Never emits `inferred` — a file-overlap guess is a
@@ -623,21 +623,33 @@ def records_from(facts_: Facts, plan, *, mine: str = "") -> "tuple[dict, ...]":
     on_trunk = reachable(facts_.commits, (trunk_sha,)) if trunk_sha else frozenset()
 
     out: "list[dict]" = []
+    reviewed = {(a.get("ref"), a.get("task")) for a in associations
+                if plan.task(a.get("task")) is not None and
+                a.get("task_fingerprint") == task_fingerprint(plan.task(a["task"]))}
     for c in facts_.commits:
         tasks, outside = trailer_tasks(c)
+        tasks = tuple(dict.fromkeys((*tasks, *(t for ref, t in sorted(reviewed) if ref == c.sha))))
         if not tasks:
             continue
-        foreign = bool(mine) and c.email and c.email != mine
+        foreign = not mine or not c.email or c.email != mine
         trust = journal.TRUST_FOREIGN if foreign else journal.TRUST_LOCAL
         for tid in tasks:
             if tid not in known:
                 continue
-            kind = "merge" if (c.sha in on_trunk and not foreign) else "commit"
+            accepted = (c.sha, tid) in reviewed
+            kind = "merge" if (c.sha in on_trunk and (not foreign or accepted)) else "commit"
             note = "trailer outside the final block" if outside else ""
             out.append(make(kind, tid, ts=c.ts, confidence="declared",
-                            ref=c.sha, author=c.email, trust=trust,
+                            ref=c.sha, author=c.email, trust="local" if accepted else trust,
                             merged_into=trunk if kind == "merge" else "",
-                            note=note))
+                            note=("reviewed association" if accepted else note)))
+    for record in out:
+        record["task_fingerprint"] = task_fingerprint(plan.task(record["task"]))
+        record["definition_reviewed"] = (record["ref"], record["task"]) in reviewed
+        record["id"] += "-" + record["task_fingerprint"][:16]
+        if record["definition_reviewed"]:
+            record["id"] += "-reviewed"
+        record["files"] = list(facts_.files.get(record["ref"], ()))
     return tuple(sorted(out, key=lambda r: (r["ts"], r["id"])))
 
 
@@ -689,11 +701,16 @@ def proposals(facts_: Facts, plan) -> "dict[str, tuple[str, ...]]":
 
 def load_evidence(root=None) -> "list[dict]":
     """read_jsonl, deduped on id — union merge can leave the same record twice."""
-    seen: "dict[str, dict]" = {}
+    import json
+    groups = {}
     for rec in read_jsonl(out_path(EVIDENCE_FILENAME, root=root)):
-        if isinstance(rec, dict) and rec.get("id"):
-            seen.setdefault(rec["id"], rec)
-    return list(seen.values())
+        if isinstance(rec.get("id"), str) and rec["id"]:
+            groups.setdefault(rec["id"], {})[json.dumps(rec, sort_keys=True)] = rec
+    result = []
+    for rid, variants in sorted(groups.items()):
+        for _, rec in sorted(variants.items()):
+            result.append({**rec, "trust": "conflict"} if len(variants) > 1 else rec)
+    return result
 
 
 def append_new(root, records) -> "list[dict]":
@@ -703,12 +720,78 @@ def append_new(root, records) -> "list[dict]":
     idempotent: running it twice adds nothing the second time.
     """
     path = out_path(EVIDENCE_FILENAME, root=root)
-    have = {r["id"] for r in load_evidence(root)}
+    added = pending_records(root, records)
+    for rec in added:
+        append_jsonl(path, rec)
+    return added
+
+
+def pending_records(root, records):
+    """Exactly what sync would append, including task-definition admission."""
+    history = load_evidence(root)
+    have = {r["id"] for r in history}
     added = []
     for rec in records:
-        if rec["id"] in have:
+        previous = [r for r in history if r.get("trust") == "local" and
+                    (r.get("task"), r.get("ref")) == (rec.get("task"), rec.get("ref"))]
+        if any(r.get("task_fingerprint") != rec.get("task_fingerprint") for r in previous) and not rec.get("definition_reviewed"):
             continue
-        append_jsonl(path, rec)
-        have.add(rec["id"])
-        added.append(rec)
+        if rec["id"] not in have:
+            added.append(rec)
+            have.add(rec["id"])
     return added
+
+
+def plan_fingerprint(plan):
+    from roadmapify.plan import emit_plan
+    return hashlib.sha256(emit_plan(plan).encode()).hexdigest()
+
+
+def current_evidence(root, *, observed=None, plan=None):
+    """Annotate history against current local facts; never fabricate a reversal.
+
+    Missing history in a shallow/truncated/unavailable repository is unknown.
+    Old records remain in the append-only log for explanation, but do not
+    retain authority when their supporting source or plan is no longer current.
+    """
+    from roadmapify.plan import load_plan
+    records = load_evidence(root)
+    if not records:
+        return []
+    plan = plan or load_plan(root)
+    observed = observed if observed is not None else facts(root, with_files=False)
+    supported = {}
+    if plan is not None and observed.ok:
+        supported = {r["id"]: r for r in records_from(
+            observed, plan, mine=identity_email(observed.identity),
+            associations=reviewed_associations(journal.load(root)))}
+    result = []
+    for rec in records:
+        if rec.get("kind") not in ("merge", "commit", "revert", "claim"):
+            result.append(rec)
+            continue
+        live = supported.get(rec.get("id"))
+        valid = (live and live.get("trust") == "local" and rec.get("trust") == "local"
+                 and rec.get("task") == live.get("task") and rec.get("ref") == live.get("ref")
+                 and rec.get("kind") == live.get("kind")
+                 and rec.get("task_fingerprint") == live.get("task_fingerprint"))
+        if valid:
+            freshness, reason = "current", "supported by current local git observations"
+        elif not observed.ok or observed.shallow or observed.truncated:
+            freshness, reason = "unknown", "history unavailable or incomplete"
+        else:
+            freshness, reason = "stale", "current history, attribution or plan no longer supports this observation"
+        result.append({**rec, "freshness": freshness, "freshness_reason": reason})
+    return result
+
+
+def reviewed_associations(records):
+    return [r["association"] for r in journal.memory_state(records)["records"]
+            if r.get("trust", "local") == "local" and isinstance(r.get("association"), dict)]
+
+
+def task_fingerprint(task):
+    from dataclasses import asdict
+    import json
+    definition = {k: v for k, v in asdict(task).items() if k not in ("line", "origin")}
+    return hashlib.sha256(json.dumps(definition, sort_keys=True).encode()).hexdigest()

@@ -2,6 +2,16 @@
 
 ## 0.1.0 (unreleased)
 
+### Review repairs and visual goal execution
+
+- Shared effective-memory and checking rules across CLI, MCP, brief and export.
+- Conservative evidence admission/current-history reconciliation, verification summaries, source freshness, scoped sessions, safe hook paths, symlink boundaries and stable identities.
+- Task context, impact analysis, reviewed historical onboarding and stronger offline planning guidance.
+- Packaged goal/dependency/decision/code diagrams with search, inspectors and SVG export.
+- Durable bounded goal runs, local host claim/check/result protocol, recovery and acknowledged stops; no automatic agent provider connection.
+- All 18 original review cases retained as desired-behavior regressions.
+
+
 P-1 "It remembers", the first of nine phases. The memory layer, shipped before any
 graph, git sync or phase logic.
 

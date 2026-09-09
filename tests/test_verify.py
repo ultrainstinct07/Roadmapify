@@ -38,7 +38,7 @@ def _plan(tasks, phases=None):
 def _ev(task, kind, **kw):
     """ts is always in the past — status drops future records as clock skew."""
     return {"id": f"E-{task}-{kind}", "task": task, "kind": kind,
-            "ts": "2026-01-01T00:00:00Z", **kw}
+            "ts": "2026-01-01T00:00:00Z", "trust": "local", "ref": "fixture-ref", **kw}
 
 
 def _report(root, tasks, evidence=(), **kw):
@@ -455,7 +455,7 @@ def test_every_verdict_survives_being_piped_as_plain_text(project):
 
 # ── end to end, through cli.dispatch ──────────────────────────────────────────
 
-def test_the_demo_a_claim_on_a_file_that_does_not_exist_is_contradicted(seeded, run):
+def test_an_incomplete_on_disk_claim_is_not_admitted(seeded, run):
     """P-5's demo end to end. The claim record is hand-written because
     `roadmap done` is still a P-3 stub — without that, exit 5 is unreachable."""
     tid = load_plan(seeded).tasks[0].id
@@ -465,8 +465,8 @@ def test_the_demo_a_claim_on_a_file_that_does_not_exist_is_contradicted(seeded, 
 
     code, out = run("verify", "--root", str(seeded))
 
-    assert code == EXIT_CONTRADICTED
-    assert "CONTRADICTED" in out and tid in out
+    assert code == EXIT_OK
+    assert "CONTRADICTED" not in out and tid in out
 
 
 def test_verify_exits_zero_when_nothing_claims_done(seeded, run):

@@ -45,7 +45,7 @@ _GENERIC = Archetype(
         ("Foundations",
          "Get a skeleton that runs and a test that proves it",
          "the project starts and one test passes",
-         "the entry point runs and CI is green on an empty test suite",
+         "the entry point runs and a nonempty smoke test checks its expected output",
          "run it and see it do nothing, on purpose"),
         ("Core",
          "Build the one thing this project exists to do",
@@ -210,11 +210,28 @@ def skeleton(archetype: str, goal: Goal) -> Plan:
             id=tid,
             label=label,
             phase=f"P-{pidx + 1}",
-            intent=intent,
+            intent=(intent or label) + ". Input: " + ("the preceding task outcome" if deps else "the reviewed goal and a representative input")
+                   + ". Output: " + arch.phases[pidx][2] + ". Acceptance: " + arch.phases[pidx][3]
+                   + ". Review template dependencies and replace example artifact paths before implementation.",
             depends_on=deps,
-            produces=tuple(produces),
+            produces=tuple(produces) or (f"file:docs/acceptance/{tid}.md",),
             provisional=(pidx + 1) > ACTIVE_PHASE_WINDOW,
             origin="template",
         ))
 
     return Plan(goal=goal, phases=tuple(phases), tasks=tuple(tasks))
+
+
+def quality(plan):
+    """Actionable review gaps. A valid syntax tree is not a reviewed plan."""
+    findings = []
+    if not plan.goal.success_criteria:
+        findings.append({"id": "G-0", "issue": "no success criteria", "action": "define observable outcomes before declaring success"})
+    if "Example input:" not in plan.goal.statement:
+        findings.append({"id": "G-0", "issue": "no representative input/output example", "action": "record one real input and its expected output in the goal statement"})
+    for task in plan.tasks:
+        if not task.produces:
+            findings.append({"id": task.id, "issue": "no declared deliverables", "action": "name artifacts or qualified symbols to inspect"})
+        if task.origin == "template":
+            findings.append({"id": task.id, "issue": "template assumptions need review", "action": "review dependencies, replace example artifact paths, and set origin to human"})
+    return findings

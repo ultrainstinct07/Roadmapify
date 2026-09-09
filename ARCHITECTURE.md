@@ -5,7 +5,7 @@ git hooks exist to make an agent use it without being told.
 
 ## The one idea
 
-**Nothing stores a status.** A roadmap rots because someone types `status = done`,
+**Nothing stores a task status in the plan.** A roadmap rots because someone types `status = done`,
 walks away for three weeks, and the file becomes a confident lie. So `roadmap.toml`
 has no status field anywhere. Status is *derived* on every run from three plain-text
 sources, and the derived layer is disposable:
@@ -20,11 +20,16 @@ roadmap-out/evidence.jsonl SOURCE  observed git facts  tracked — WRITTEN IN P-
                           * not written yet: ROADMAP.md unclaimed, MODERATION.md is P-6
 ```
 
-`evidence.jsonl` does not exist yet — `roadmap sync` (P-3) is what appends to it.
-Its `.gitattributes` and `.gitignore` entries are staged ahead of it on purpose, so
-the first record ever written is already merge-safe. Until then no task can read as
-done, and `roadmap next` says so on its second line rather than showing a zeroed
-board without explanation.
+`roadmap sync` appends observed git facts. Consumers admit local records with
+identity, valid timestamps and required references, then reconcile historical
+support against current git facts and each task's definition fingerprint. Unavailable or
+incomplete history produces uncertainty; missing support never silently preserves
+completion. Retired memory remains historical and unaccepted foreign transitions
+cannot change local authority.
+
+Goal execution persists operational run state in `roadmap-out/.goal-run.json`.
+It is gitignored and distinct from both the source plan and evidence logs.
+Do not delete it while a host owns a step: recover using the durable handle.
 
 Delete everything derived and `roadmap build` reproduces it byte-identically.
 `tests/test_plan.py::test_round_trip_is_byte_stable` is the proof for the plan half,
@@ -33,8 +38,8 @@ and `tests/test_project.py` for the graph.
 ## Pipeline
 
 ```
-load_plan() → journal.load() → sync()* → project() → status.snapshot() → render.* → export.*
-                              * P-3; today the evidence log is simply empty
+load_plan() → journal.load() → memory_state() → project() → render.* / workspace
+                 git facts → current_evidence() → status.snapshot() → verify()
 ```
 
 Stages pass plain dicts and frozen dataclasses. No stage has side effects outside
@@ -66,8 +71,14 @@ table cannot drift from the code.
 | `cli.py` | `dispatch`, `COMMANDS`, `NOT_YET`, `refresh_brief`, `EXIT_REJECTED`, `EXIT_CONSTRAINT`, `EXIT_NOT_YET` | argv → exit code |
 | `__main__.py` | `main` | console entry point |
 
-Not yet built (see the build plan): `score.py`,
-`moderate.py`, `llm.py`, and the session hook half of `install.py`.
+| `checking.py` | `check` | shared structured approach result for CLI and MCP |
+| `bridge.py` | `load`, `validate`, `context`, `symbol`, `source_path`, `freshness` | bounded graphify JSON and exact source / qualified-symbol associations |
+| `workflow.py` | `context`, `impact`, `onboarding`, `inputs`, `memory_fingerprint`, `artifact_stamp` | task recovery, impact traversal, reviewable historical associations |
+| `score.py` | `score` | separate current evidence coverage and declared attribution share |
+| `execution.py` | `start`, `read`, `tick`, `claim`, `check_approach`, `finish`, `request`, `resume`, `accept`, `drive` | locked durable run transitions and explicit local agent host API |
+| `workspace.py` | `snapshot`, `to_html`, `export`, `serve` | packaged offline diagrams and token-protected loopback controls |
+
+Not yet built (see the build plan): `moderate.py`, `llm.py`, and the session hook half of `install.py`.
 
 ## Exit codes
 
@@ -124,3 +135,29 @@ write into `~/.claude/`.
 ```bash
 python3 -m pytest tests/ -q
 ```
+
+## Goal execution boundary
+
+The controller never launches a provider or imports a host from tracked project
+configuration. The host is an already-running agent using the local CLI protocol
+or an embedding application explicitly supplying a host object. Only gitsync.py
+spawns a process, with literal read-only git arguments. The base dependency set
+is unchanged. Stop requests require host acknowledgment; limits do not imply
+process termination. See [the host contract](roadmapify/references/goal-host.md).
+
+Work results are saved before reconciliation. A reconnect reuses the durable
+step ID and requires the host to recover the existing execution instead of
+blindly repeating it. Run state never sets task status. Goal completion requires
+current evidence, supported artifacts and explicit acceptance of every criterion.
+Artifact changes invalidate acceptance.
+
+The HTML workspace uses package-local assets, accessible button nodes and SVG
+connectors. Static export works offline. The optional loopback server validates
+Host, Origin and a per-process token for its bounded control API. Browser-facing
+controls cannot submit host results, change the source plan or launch commands.
+
+New journal record IDs hash the complete canonical record with 130 bits of
+identity. Legacy short IDs remain readable; conflicting records are preserved
+under deterministic identities and quarantined from enforcement. Active memory
+is resolved once and reused by every surface. Traversal derives from current
+sources rather than trusting cache existence.

@@ -99,13 +99,15 @@ def brief_md(plan, records: list[dict], rejections: list[dict], *, now: datetime
     """Render BRIEF.md. Section order is fixed; three sections never truncate."""
     goal = plan.goal if plan else None
     L: list[str] = []
-    superseded = {r["supersedes"] for r in records if r.get("supersedes")}
+    from roadmapify.journal import memory_state
+    memory = memory_state(records)
+    superseded = memory["superseded"]
 
     def by(kind: str) -> list[dict]:
         return [r for r in records if r.get("kind") == kind]
 
-    local = [r for r in records if r.get("trust") != TRUST_FOREIGN]
-    foreign = [r for r in records if r.get("trust") == TRUST_FOREIGN]
+    local = memory["records"]
+    foreign = memory["informational"]
 
     L.append("# BRIEF")
     L.append("")
@@ -158,7 +160,7 @@ def brief_md(plan, records: list[dict], rejections: list[dict], *, now: datetime
         L.append("")
 
     # 5. Decisions — the one section the cap trims.
-    decisions = [r for r in local if r.get("kind") == "decision"]
+    decisions = [r for r in records if r["id"] in memory["admitted"] and r.get("kind") == "decision"]
     if decisions:
         L.append("## Decisions")
         L.append("")
@@ -178,8 +180,7 @@ def brief_md(plan, records: list[dict], rejections: list[dict], *, now: datetime
 
     # 6. Rejections — never truncated. This is the section that stops an agent
     #    re-proposing a dead idea, which is the single highest-value thing here.
-    live = [x for x in rejections if x.get("trust") != TRUST_FOREIGN
-            and x["parent"] not in superseded]
+    live = memory["rejections"]
     if live:
         L.append("## Already rejected — do not re-propose")
         L.append("")
@@ -375,7 +376,7 @@ def why_screen(target: str, matches: list[dict], rejections: list[dict],
     L = [bold(target), ""]
     L.append("because")
     for r in matches:
-        state = magenta("SUPERSEDED") if r["id"] in superseded else green("ACTIVE")
+        state = magenta("SUPERSEDED") if r["id"] in superseded else (yellow("INFORMATIONAL · not enforced") if r.get("trust") in ("foreign", "conflict") else green("ACTIVE"))
         L.append(f"  {yellow(r['id'])}  {r['text']}   {state}")
         killer = (reversed_by or {}).get(r["id"])
         if killer:
@@ -495,7 +496,7 @@ def next_screen(plan, snapshot, *, now: datetime, phase: "str | None" = None) ->
             L.append(f"  {ts.id}  {plan.task(ts.id).label:<40} "
                      f"{dim('waiting on ' + ', '.join(ts.blocked_by))}")
 
-    path = snapshot.remaining_path or snapshot.critical_path
+    path = snapshot.remaining_path
     if path:
         L += ["", f"{bold('critical path')}   {len(path)} tasks"]
         L.append("  " + " → ".join(path))
@@ -672,6 +673,10 @@ def verify_screen(plan, report, *, now: datetime) -> str:
               dim("  is proof, and verify is not choosing between them. Do the "
                   "work, or fix"),
               dim("  the `produces` line.")]
+    elif c["claimed"] and report.verdict != _v.CORROBORATED:
+        L += ["", yellow("UNCHECKABLE / PARTIAL SUPPORT"),
+              dim("  Some claimed deliverables are unknown, weak, or unresolvable."),
+              dim("  Present artifacts do not establish that unchecked work succeeded.")]
     elif c["claimed"]:
         L += ["", green("CORROBORATED"),
               dim(f"  {c['claimed']} task(s) claim done and every declared "

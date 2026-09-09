@@ -309,9 +309,10 @@ def test_doctor_reports_a_dependency_cycle(seeded, run):
     assert "dependency cycle" in out
 
 
-def test_doctor_is_clean_on_a_healthy_project(seeded, run):
+def test_doctor_flags_unreviewed_template_assumptions(seeded, run):
     _, out = run("doctor", "--root", str(seeded))
-    assert "nothing to report" in out
+    assert "template assumptions need review" in out
+    assert "no representative input/output example" in out
 
 
 # ── install ───────────────────────────────────────────────────────────────────
@@ -629,3 +630,21 @@ def test_no_shipped_command_is_also_announced_as_unbuilt():
     with exit 2 as the only symptom."""
     for name in cli.NOT_YET:
         assert cli.COMMANDS[name].__qualname__.startswith("cmd_not_yet"), name
+
+
+def test_init_captures_a_representative_input_and_output(project, run):
+    code, _ = run("init", "format records", "--example-input", '{"name":"Ada"}',
+                  "--example-output", "Ada", "--root", str(project))
+    assert code == 0
+    from roadmapify.plan import load_plan
+    p = load_plan(project)
+    assert 'Example input: {"name":"Ada"}' in p.goal.statement
+    assert "Expected output: Ada" in p.goal.statement
+    assert p.goal.success_criteria
+    assert all(t.produces for t in p.tasks)
+
+
+def test_init_refuses_an_example_without_expected_output(project, run):
+    code, text = run("init", "format records", "--example-input", "Ada", "--root", str(project))
+    assert code == 1
+    assert not plan_path(project).exists()

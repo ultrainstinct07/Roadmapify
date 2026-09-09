@@ -258,6 +258,7 @@ label = "Make or remove `roadmap check --json`"
 phase = "P-1"
 intent = "a declared flag that is never read is a worse surface than no flag"
 depends_on = ["T-07"]
+produces = ["file:roadmapify/cli.py", "test:tests/test_review_regressions.py"]
 origin = "human"
 
 [[task]]
@@ -423,4 +424,59 @@ id = "T-23"
 label = "Optional LLM refinement inside the fixed skeleton"
 phase = "P-9"
 provisional = true
+origin = "human"
+
+# Review-driven enhancements requested 2026-09-09. Status remains derived.
+[[task]]
+id = "T-29"
+label = "Consistent authority and evidence across every surface"
+phase = "P-1"
+intent = "Use shared effective memory and checking; reject stale or untrusted completion, preserve record identity, and protect filesystem and session boundaries. All 18 reviewed defect cases have desired-behavior regressions."
+depends_on = ["T-05", "T-12", "T-16"]
+produces = ["file:roadmapify/checking.py", "test:tests/test_review_regressions.py"]
+origin = "human"
+
+[[task]]
+id = "T-30"
+label = "Task recovery and impact explanations"
+phase = "P-2"
+intent = "One context packet separates the goal, current memory, blockers, current git observations, artifact inspection, reported checks and uncertainty. Impact follows the declared plan graph."
+depends_on = ["T-09", "T-10", "T-29"]
+produces = ["file:roadmapify/workflow.py", "test:tests/test_workflow.py"]
+origin = "human"
+
+[[task]]
+id = "T-31"
+label = "Reviewed evidence onboarding for existing projects"
+phase = "P-3"
+intent = "Inspect historical commit proposals and explicitly accept exact commit-to-task associations with a reason, without rewriting commits."
+depends_on = ["T-12", "T-29"]
+produces = ["file:roadmapify/workflow.py", "test:tests/test_workflow.py"]
+origin = "human"
+
+[[task]]
+id = "T-32"
+label = "Visual goal workspace with diagram and code views"
+phase = "P-2"
+intent = "Goal and phase nodes, task dependencies, effective decisions, Graphify source context, accessible inspectors, search, text outline, pan/zoom and SVG export."
+depends_on = ["T-24", "T-30", "T-17"]
+produces = ["file:roadmapify/workspace.py", "file:roadmapify/workspace.html", "file:roadmapify/bridge.py", "test:tests/test_workspace_server.py"]
+origin = "human"
+
+[[task]]
+id = "T-33"
+label = "Bounded goal execution through a local agent host"
+phase = "P-7"
+intent = "Durable run and step identity, approach checking, budgets, host-acknowledged pauses, crash reconciliation and criterion acceptance. The host uses its existing tools; roadmapify does not launch a provider or set task status."
+depends_on = ["T-29", "T-30", "T-32"]
+produces = ["file:roadmapify/execution.py", "file:roadmapify/references/goal-host.md", "test:tests/test_goal_execution.py"]
+origin = "human"
+
+[[task]]
+id = "T-34"
+label = "Concrete offline planning and review guidance"
+phase = "P-2"
+intent = "Capture representative input and expected output, declare acceptance artifacts, and identify missing criteria, deliverables and unreviewed template dependency assumptions."
+depends_on = ["T-04"]
+produces = ["file:roadmapify/templates.py", "test:tests/test_templates.py", "test:tests/test_cli.py"]
 origin = "human"

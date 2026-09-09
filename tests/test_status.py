@@ -28,7 +28,7 @@ def _plan(tasks, phases=None):
 
 def _ev(task, kind, **kw):
     return {"id": f"E-{task}-{kind}", "task": task, "kind": kind,
-            "ts": "2026-01-01T00:00:00Z", **kw}
+            "ts": "2026-01-01T00:00:00Z", "trust": "local", "ref": "fixture-ref", **kw}
 
 
 def test_with_no_evidence_only_tasks_without_dependencies_are_ready():

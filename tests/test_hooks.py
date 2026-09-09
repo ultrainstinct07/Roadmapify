@@ -64,3 +64,28 @@ def test_hook_body_never_contains_mutating_git_verbs():
     for verb in ("git branch", "git checkout", "git switch", "git rebase",
                  "git merge", "git push", "git reset", "git config"):
         assert verb not in body, f"hook body contains {verb!r}"
+
+
+def test_hook_root_with_quotes_and_newlines_is_data_and_skip_preserves_tail(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from roadmapify.plan import Goal, PhaseSpec, Plan, TaskSpec, emit_plan
+    root = tmp_path / "O'Brien\nproject"
+    root.mkdir()
+    (root / "roadmap.toml").write_text(emit_plan(Plan(Goal("quoted path"),
+        (PhaseSpec("P-1", "phase", 1),), (TaskSpec("T-01", "task", "P-1"),))))
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    git = binary / "git"
+    git.write_text('#!/bin/sh\nprintf "%s\\n" "$TEST_ROOT"\n')
+    git.chmod(0o755)
+    hook = tmp_path / "hook"
+    hook.write_text('#!/bin/sh\n' + hooks._hook_body(sys.executable) + '\nwait\nprintf "tail-ran\\n"\n')
+    env = {**os.environ, "PATH": str(binary) + os.pathsep + os.environ.get("PATH", ""), "TEST_ROOT": str(root)}
+    result = subprocess.run(["sh", str(hook)], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0 and "tail-ran" in result.stdout
+    assert (root / "roadmap-out" / "BRIEF.md").exists()
+    env["ROADMAP_SKIP_HOOK"] = "1"
+    skipped = subprocess.run(["sh", str(hook)], env=env, capture_output=True, text=True, timeout=10)
+    assert "tail-ran" in skipped.stdout

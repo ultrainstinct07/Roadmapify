@@ -121,7 +121,13 @@ def node_id(ref: str, source_file: str) -> str:
     that silently doubles the graph.
     """
     stem = source_file.rsplit(".", 1)[0] if "." in source_file.rsplit("/", 1)[-1] else source_file
-    return f"{_slug(stem)}_{_slug(ref)}".strip("_")
+    import hashlib
+    # Keep public task/phase IDs readable; arbitrary deliverable paths need
+    # the exact identity too (a-b.py and a_b.py are different files).
+    base = f"{_slug(stem)}_{_slug(ref)}".strip("_")
+    if ref.startswith(("file:", "test:", "glob:", "symbol:", "cmd:")):
+        return base + "_" + hashlib.sha256((source_file + "\0" + ref).encode()).hexdigest()[:32]
+    return base
 
 
 @dataclass(frozen=True)
@@ -322,7 +328,7 @@ def project(plan, records: "list[dict] | tuple" = (),
                                   PLAN_SOURCE, str(t.line) if t.line else None))
         for spec in t.produces:
             kind, value = split_deliverable(spec)
-            did = f"{node_id('deliverable', PLAN_SOURCE)}_{_slug(spec)}"
+            did = node_id(spec if ":" in spec else "file:" + spec, PLAN_SOURCE)
             if did not in seen_deliverables:
                 seen_deliverables.add(did)
                 nodes.append(Node(
@@ -359,10 +365,9 @@ def _project_memory(nodes, edges, records, rejections) -> None:
     """Journal records and their rejections, and how they attach to the plan."""
     from roadmapify.journal import TRUST_FOREIGN
 
-    superseded: "set[str]" = set()
-    for r in records:
-        if r.get("supersedes"):
-            superseded.add(r["supersedes"])
+    from roadmapify.journal import memory_state
+    memory = memory_state(records)
+    superseded = memory["superseded"]
 
     plan_refs = {n.ref: n.id for n in nodes}
 
@@ -377,7 +382,7 @@ def _project_memory(nodes, edges, records, rejections) -> None:
             source_file=JOURNAL_SOURCE, source_location=None,
             captured_at=r.get("ts"), author=r.get("author"),
             rationale=r.get("why", "") or "", kind=r["kind"], ref=r["id"],
-            trust=r.get("trust", ""), superseded=r["id"] in superseded,
+            trust=("accepted" if r["id"] in memory["accepted"] else r.get("trust", "local")), superseded=r["id"] in superseded,
         ))
         for target in r.get("about") or ():
             if target in plan_refs:
@@ -392,7 +397,7 @@ def _project_memory(nodes, edges, records, rejections) -> None:
             id=xid, label=x.get("alt", ""), file_type=FILE_TYPE["rejection"],
             source_file=JOURNAL_SOURCE, captured_at=x.get("ts"),
             author=x.get("author"), rationale=x.get("reason", "") or "",
-            kind="rejection", ref=x["id"], trust=x.get("trust", ""),
+            kind="rejection", ref=x["id"], trust=("accepted" if x.get("parent") in memory["accepted"] else x.get("trust", "")),
             superseded=x.get("parent") in superseded,
         ))
         edges.append(Edge(xid, node_id(x["parent"], JOURNAL_SOURCE),

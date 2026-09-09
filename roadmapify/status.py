@@ -116,7 +116,8 @@ class Snapshot:
 
 def load_evidence(root=None) -> "list[dict]":
     """Read the observed-facts log. Absent today; ``read_jsonl`` returns ``[]``."""
-    return read_jsonl(out_path(EVIDENCE_FILENAME, root=root))
+    from roadmapify.gitsync import current_evidence
+    return current_evidence(root)
 
 
 def normalize_evidence(rec: dict, *, known_tasks: "set[str] | None" = None,
@@ -131,11 +132,21 @@ def normalize_evidence(rec: dict, *, known_tasks: "set[str] | None" = None,
     if not isinstance(rec, dict):
         return None
     kind, task = rec.get("kind"), rec.get("task")
-    if kind not in EVIDENCE_KINDS or not task:
+    if not isinstance(kind, str) or not isinstance(task, str) or kind not in EVIDENCE_KINDS or not task:
         return None
     if known_tasks is not None and task not in known_tasks:
         return None
+    if rec.get("trust") != "local" or rec.get("freshness") in ("stale", "unknown"):
+        return None
+    if not isinstance(rec.get("id"), str) or not rec["id"]:
+        return None
+    if kind in ("commit", "merge", "revert") and (not isinstance(rec.get("ref"), str) or not rec["ref"]):
+        return None
     ts = rec.get("ts") or ""
+    from roadmapify.render import parse_ts
+    parsed = parse_ts(ts) if isinstance(ts, str) else None
+    if parsed is None or parsed.tzinfo is None:
+        return None
     if now is not None and ts:
         from roadmapify.render import parse_ts
         seen = parse_ts(ts)
@@ -168,7 +179,12 @@ def status_of(plan, evidence: "list[dict] | tuple" = (), *,
     admitted = [e for e in (normalize_evidence(r, known_tasks=known, now=now)
                             for r in evidence) if e]
 
-    reverted = {r.get("ref") for r in admitted if r["kind"] == "revert"}
+    from roadmapify.gitsync import task_fingerprint
+    fingerprints = {t.id: task_fingerprint(t) for t in plan.tasks}
+    admitted = [r for r in admitted if not r.get("task_fingerprint") or
+                r["task_fingerprint"] == fingerprints[r["task"]]]
+
+    reverted = {(r["task"], r.get("ref")) for r in admitted if r["kind"] == "revert"}
     by_task: "dict[str, list[dict]]" = {t: [] for t in known}
     for r in admitted:
         by_task[r["task"]].append(r)
@@ -181,7 +197,7 @@ def status_of(plan, evidence: "list[dict] | tuple" = (), *,
             continue
         mine = by_task.get(tid, [])
         kinds = {r["kind"] for r in mine if not (r["kind"] == "merge"
-                                                and r.get("ref") in reverted)}
+                                                and (r["task"], r.get("ref")) in reverted)}
         if "merge" in kinds:
             state, unmet = DONE, ()
         elif "claim" in kinds:
@@ -291,8 +307,10 @@ def critical_path(plan, *, include_provisional: bool = False) -> "tuple[str, ...
 def remaining_path(plan, statuses: dict, *,
                    include_provisional: bool = False) -> "tuple[str, ...]":
     """The critical path with finished work dropped — the path ahead."""
-    return tuple(t for t in critical_path(plan, include_provisional=include_provisional)
-                 if t not in statuses or statuses[t].status not in DONE_STATES)
+    dag = task_dag(plan, include_provisional=include_provisional)
+    remaining = {t for t in dag if t not in statuses or statuses[t].status not in DONE_STATES}
+    return _longest({t: tuple(d for d in deps if d in remaining)
+                     for t, deps in dag.items() if t in remaining})
 
 
 def snapshot(plan, evidence: "list[dict] | tuple" = (), *,
@@ -317,8 +335,6 @@ def snapshot(plan, evidence: "list[dict] | tuple" = (), *,
         ready=ready,
         critical_path=critical_path(plan),
         remaining_path=remaining_path(plan, statuses),
-        evidence_count=len([e for e in evidence
-                            if normalize_evidence(e, known_tasks={t.id for t in plan.tasks},
-                                                  now=now)]),
+        evidence_count=sum(len(t.evidence) for t in statuses.values()),
         needs_expand=needs_expand,
     )

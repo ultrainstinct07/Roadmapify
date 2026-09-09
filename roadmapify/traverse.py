@@ -100,6 +100,8 @@ def neighbors(graph: dict, nid: str) -> list[dict]:
                     "id": tgt,
                     "ref": by_id[tgt].get("roadmap_id") or tgt,
                     "label": by_id[tgt].get("label", tgt),
+                    "trust": by_id[tgt].get("roadmap_trust", ""),
+                    "superseded": by_id[tgt].get("roadmap_superseded", False),
                     "relation": e.get("relation", ""),
                     "edge_kind": e.get("roadmap_edge", ""),
                     "confidence": e.get("confidence", "EXTRACTED"),
@@ -113,6 +115,8 @@ def neighbors(graph: dict, nid: str) -> list[dict]:
                     "id": src,
                     "ref": by_id[src].get("roadmap_id") or src,
                     "label": by_id[src].get("label", src),
+                    "trust": by_id[src].get("roadmap_trust", ""),
+                    "superseded": by_id[src].get("roadmap_superseded", False),
                     "relation": e.get("relation", ""),
                     "edge_kind": e.get("roadmap_edge", ""),
                     "confidence": e.get("confidence", "EXTRACTED"),
@@ -140,6 +144,8 @@ def explain(graph: dict, query: str) -> "dict | None":
         "degree": len(neigh),
         "file_type": node.get("file_type"),
         "kind": node.get("roadmap_kind"),
+        "trust": node.get("roadmap_trust"),
+        "superseded": node.get("roadmap_superseded", False),
         "why": node.get("rationale") or None,
         "intent": node.get("rationale") if node.get("roadmap_kind") == "task" else None,
         "neighbors": neigh,
@@ -187,6 +193,8 @@ def shortest_path(graph: dict, source: str, target: str, *,
             "id": cur,
             "ref": n.get("roadmap_id") or cur,
             "label": n.get("label", cur),
+            "trust": n.get("roadmap_trust", ""),
+            "superseded": n.get("roadmap_superseded", False),
             "relation": (edge or {}).get("relation") if edge else None,
             "confidence": (edge or {}).get("confidence") if edge else None,
             "from": pred,
@@ -263,7 +271,7 @@ def query(graph: dict, question: str, *, mode: str = "bfs", depth: int = 2,
         ref = n.get("roadmap_id") or nid
         line = (f"NODE {ref}  {n.get('label', '')}  "
                 f"[src={n.get('source_file', '')} {n.get('source_location') or ''}] "
-                f"kind={n.get('roadmap_kind', '')}")
+                f"kind={n.get('roadmap_kind', '')} {authority(n)}")
         cost = max(1, len(line.split()))
         if used + cost > budget and included:
             break
@@ -312,6 +320,11 @@ def explain_screen(card: "dict | None", query: str) -> str:
     ]
     if card.get("kind"):
         lines.append(f"  Kind:       {card['kind']}")
+    if card.get("trust"):
+        trust = card["trust"]
+        lines.append(f"  Trust:      {trust}" + (" · not enforced" if trust in ("foreign", "conflict") else ""))
+    if card.get("superseded"):
+        lines.append("  Authority:  historical · superseded · not enforced")
     if card.get("intent"):
         lines.append(f"  Intent:     {card['intent']}")
     elif card.get("why"):
@@ -321,7 +334,7 @@ def explain_screen(card: "dict | None", query: str) -> str:
     for n in card["neighbors"][:40]:
         arrow = "-->" if n["direction"] == "out" else "<--"
         lines.append(f"  {arrow} {n['label']} [{n['relation']}] [{n['confidence']}]")
-        lines.append(f"       ({n.get('ref') or n['id']})")
+        lines.append(f"       ({n.get('ref') or n['id']}) {authority(n)}")
     if card["degree"] > 40:
         lines.append(f"  … {card['degree'] - 40} more")
     return "\n".join(lines)
@@ -339,7 +352,7 @@ def path_screen(hops: "list[dict] | None", source: str, target: str) -> str:
         rel = h.get("relation") or "related"
         conf = h.get("confidence") or "EXTRACTED"
         lines.append(
-            f"    --{rel}[{conf}]--> {h['label']} ({h.get('ref') or h['id']})"
+            f"    --{rel}[{conf}]--> {h['label']} ({h.get('ref') or h['id']}) {authority(h)}"
         )
     return "\n".join(lines)
 
@@ -354,4 +367,18 @@ def query_screen(result: dict) -> str:
 
 def ensure_graph(root=None) -> "dict | None":
     """Load graph.json, or None if it has not been built yet."""
-    return load_graph(root)
+    from roadmapify import journal, project
+    from roadmapify.plan import load_plan
+    plan = load_plan(root)
+    if plan is None:
+        return None
+    records = journal.load(root)
+    return project.to_json(project.project(plan, records, journal.rejections(records)))
+
+
+def authority(node):
+    trust = node.get("trust") or node.get("roadmap_trust") or ""
+    retired = node.get("superseded") or node.get("roadmap_superseded")
+    return ("[historical; not enforced]" if retired else
+            "[" + trust + "; not enforced]" if trust in ("foreign", "conflict") else
+            "[" + trust + "]" if trust else "")

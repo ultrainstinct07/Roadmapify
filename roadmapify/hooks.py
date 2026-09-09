@@ -28,13 +28,14 @@ _HOOK_BODY = """\
 # the derive lock — hooks are idempotent and the next run catches up.
 # PINNED was recorded at `roadmap hook install` so GUI clients without
 # ~/.local/bin on PATH still find the package.
-[ "${ROADMAP_SKIP_HOOK:-0}" = "1" ] && exit 0
+if [ "${ROADMAP_SKIP_HOOK:-0}" != "1" ]; then
 _PINNED='__PINNED_PYTHON__'
-_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
-if [ -n "$_PINNED" ] && [ -x "$_PINNED" ]; then
-  "$_PINNED" -c "from roadmapify.cli import refresh_brief; from pathlib import Path; refresh_brief(Path('$_ROOT'), wait=0)" >/dev/null 2>&1 &
-elif command -v roadmap >/dev/null 2>&1; then
+_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || _ROOT=""
+if [ -n "$_ROOT" ] && [ -n "$_PINNED" ] && [ -x "$_PINNED" ]; then
+  "$_PINNED" -c "from roadmapify.cli import refresh_brief; from pathlib import Path; import sys; refresh_brief(Path(sys.argv[1]), wait=0)" "$_ROOT" >/dev/null 2>&1 &
+elif [ -n "$_ROOT" ] && command -v roadmap >/dev/null 2>&1; then
   roadmap brief --root "$_ROOT" >/dev/null 2>&1 &
+fi
 fi
 """
 

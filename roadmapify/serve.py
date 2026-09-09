@@ -32,16 +32,7 @@ ALL_TOOLS = READ_TOOLS + WRITE_TOOLS
 
 
 def _graph_for(root: Path) -> dict:
-    g = load_graph(root)
-    if g is not None:
-        return g
-    plan = load_plan(root)
-    records = journal.load(root)
-    if plan is None:
-        return {"nodes": [], "edges": [], "generator": "roadmapify"}
-    graph = project_graph(plan, records, journal.rejections(records))
-    write_graph(graph, root)
-    return _project_mod.to_json(graph)
+    return traverse.ensure_graph(root) or {"nodes": [], "edges": [], "generator": "roadmapify"}
 
 
 # ── handlers (pure enough to unit-test) ───────────────────────────────────────
@@ -80,7 +71,7 @@ def handle_get_neighbors(root: Path, args: dict) -> str:
         arrow = "-->" if n["direction"] == "out" else "<--"
         lines.append(
             f"  {arrow} {n['label']} [{n['relation']}] [{n['confidence']}] "
-            f"({n.get('ref') or n['id']})"
+            f"({n.get('ref') or n['id']}) {traverse.authority(n)}"
         )
     return "\n".join(lines) if neigh else f"no neighbors for {label!r}"
 
@@ -101,56 +92,18 @@ def handle_check_approach(root: Path, args: dict) -> str:
     approach = args.get("approach") or args.get("question") or ""
     if not approach:
         return "error: approach is required"
-    records = journal.load(root)
-    superseded = journal.superseded_ids(records)
-    accepted = {r["accepted"] for r in records if r.get("accepted")}
-
-    def enforceable(r: dict) -> bool:
-        return (r.get("trust") != journal.TRUST_FOREIGN or r["id"] in accepted) \
-            and r["id"] not in superseded
-
-    rejections = [x for x in journal.rejections(records)
-                  if x["parent"] not in superseded
-                  and (x.get("trust") != journal.TRUST_FOREIGN or x["parent"] in accepted)]
-    constraints = [r for r in records if r["kind"] == "constraint" and enforceable(r)]
-    corpus = [f"{x['alt']} {x.get('reason', '')}" for x in rejections] + \
-             [f"{r['text']} {r.get('why', '')}" for r in constraints]
-    ubiquitous = textmatch.corpus_stopwords(corpus)
-    q = textmatch.strip_tokens(approach, ubiquitous) or approach
-
-    rej_scored = textmatch.rank(
-        q, [(x["id"], x["alt"], f"{x.get('reason', '')} {x['parent_text']}") for x in rejections],
-    )
-    con_hits = {r["id"]: textmatch.constraint_score(q, r["text"], r.get("why", ""))
-                for r in constraints}
-    con_scored = sorted(((k, v[0]) for k, v in con_hits.items()), key=lambda kv: -kv[1])
-    by_id = {x["id"]: x for x in rejections}
-    by_id.update({r["id"]: r for r in constraints})
-
-    top_rej = rej_scored[0] if rej_scored else None
-    top_con = con_scored[0] if con_scored else None
-    if top_rej and top_rej[1] >= textmatch.MATCH_FLOOR:
-        x = by_id[top_rej[0]]
-        return (f"REJECTED ({top_rej[1]:.2f})\n"
-                f"  {x['id']}  {x.get('alt')}\n"
-                f"  reason: {x.get('reason') or '—'}\n"
-                f"  parent: {x.get('parent_text', '')[:120]}")
-    if top_con and top_con[1] >= textmatch.MATCH_FLOOR:
-        r = by_id[top_con[0]]
-        return (f"VIOLATES_CONSTRAINT ({top_con[1]:.2f})\n"
-                f"  {r['id']}  {r.get('text')}\n"
-                f"  why: {r.get('why') or '—'}")
-    return f"CLEAR\n  approach: {approach}"
+    from roadmapify.checking import check
+    result = check(approach, journal.load(root), load_plan(root))
+    return result["verdict"] + "\n" + json.dumps(result, ensure_ascii=True, sort_keys=True)
 
 
 def handle_get_brief(root: Path, args: dict) -> str:
-    path = out_path(BRIEF_FILENAME, root=root)
-    if not path.is_file():
-        refresh_brief(root)
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return f"error: {exc}"
+    from roadmapify import render
+    from roadmapify.cli import _now
+    refresh_brief(root)  # cache maintenance; response below still uses live inputs
+    records = journal.load(root)
+    return render.brief_md(load_plan(root), records, journal.rejections(records),
+                           now=_now(), open_sessions=journal.open_sessions(records))
 
 
 def handle_record_note(root: Path, args: dict) -> str:

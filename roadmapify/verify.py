@@ -151,7 +151,7 @@ class Report:
             tasks=len(self.tasks),
             declarations=self.declarations,
             deliverables=len(self.resolutions),
-            weak=sum(1 for r in self.resolutions if r.weak),
+            weak=sum(1 for r in self.resolutions if r.weak and r.verdict == PRESENT),
             undeclared=sum(1 for t in self.tasks if t.undeclared),
             claimed=sum(1 for t in self.tasks if t.claimed),
             contradicted=len(self.contradicted),
@@ -168,8 +168,11 @@ class Report:
         which an exit code alone cannot give."""
         if self.contradicted:
             return CONTRADICTED
-        if any(t.claimed for t in self.tasks):
-            return CORROBORATED
+        claimed = [t for t in self.tasks if t.claimed]
+        if claimed:
+            if all(t.finding == CORROBORATED for t in claimed):
+                return CORROBORATED
+            return UNCHECKABLE
         return NOTHING_CLAIMED
 
 
@@ -201,7 +204,13 @@ def anchor(root: "str | Path", value: str) -> "Path | None":
     joined = os.path.normpath(os.path.join(base, *[p for p in parts if p != "."]))
     if joined != base and not joined.startswith(base + os.sep):
         return None
-    return Path(joined)
+    path = Path(joined)
+    for parent in reversed(path.parents):
+        if str(parent) == base or not str(parent).startswith(base + os.sep):
+            continue
+        if parent.is_symlink():
+            return None
+    return path
 
 
 def _typo_kind(value: str) -> "str | None":
@@ -273,9 +282,13 @@ def _glob(root: Path, value: str) -> "tuple[str, str, int, str]":
     rest = parts[len(base):]
     start = root.joinpath(*base) if base else root
     if not rest:
+        if start.is_symlink() or anchor(root, str(start.relative_to(root))) is None:
+            return UNRESOLVABLE, "spec", 0, "symlink traversal refused"
         if start.exists():
             return PRESENT, "glob", 1, "1 match"
         return MISSING, "glob", 0, "no matches"
+    if start.is_symlink() or anchor(root, str(start.relative_to(root))) is None:
+        return UNRESOLVABLE, "spec", 0, "symlink traversal refused"
     if not start.is_dir():
         return MISSING, "glob", 0, "no matches"
 
@@ -336,7 +349,15 @@ def resolve_spec(spec: str, root: "str | Path", *, line: int = 0,
     if kind == "symbol":
         if code_graph is None:
             return r(UNVERIFIABLE, "none", "no code graph — the bridge is T-17")
-        return r(UNVERIFIABLE, "none", "no code graph — the bridge is T-17")
+        from roadmapify import bridge
+        try:
+            graph = bridge.validate(code_graph)
+        except ValueError as exc:
+            return r(UNRESOLVABLE, "graph", str(exc))
+        matched = bridge.symbol(graph, value)
+        if matched is None:
+            return r(UNVERIFIABLE, "graph", "no unique qualified symbol match")
+        return r(PRESENT, "graph", "symbol indexed · graph freshness unknown · context only", weak=True)
 
     if kind == "glob":
         if anchor(root, value.split("*")[0].split("?")[0] or ".") is None:
@@ -357,6 +378,8 @@ def resolve_spec(spec: str, root: "str | Path", *, line: int = 0,
     if path is None:
         return r(UNRESOLVABLE, "spec", f"escapes the project root{where}")
 
+    if path.is_symlink():
+        return r(UNVERIFIABLE, "stat", "symlink target not followed", weak=True)
     if not path.exists():
         if ":" in path_value:
             return r(MISSING, "stat",
@@ -473,8 +496,10 @@ def verify(plan, snapshot, root: "str | Path", *, task: str = "", phase: str = "
             finding = CONTRADICTED
         elif claimed and not present and not missing:
             finding = UNCHECKABLE
-        elif claimed and present and not missing:
+        elif claimed and len(present) == len(mine) and not any(r.weak for r in mine):
             finding = CORROBORATED
+        elif claimed:
+            finding = UNCHECKABLE
         elif not claimed and mine and present and not missing:
             finding = UNCLAIMED_WORK
         else:

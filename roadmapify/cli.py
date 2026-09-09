@@ -106,6 +106,8 @@ def cmd_init(argv: list[str]) -> int:
     p.add_argument("--statement", default="", help="2-4 sentences: what shipping looks like")
     p.add_argument("--archetype", default="auto",
                    choices=["auto", *sorted(templates.ARCHETYPES)])
+    p.add_argument("--example-input", default="")
+    p.add_argument("--example-output", default="")
     p.add_argument("--criteria", action="append", default=[],
                    help="a checkable 'done means' sentence; repeatable")
     p.add_argument("--root", default=None)
@@ -114,6 +116,12 @@ def cmd_init(argv: list[str]) -> int:
 
     if not a.goal:
         return _err('a goal is required:  roadmap init "<what you are building>"')
+
+    if bool(a.example_input) != bool(a.example_output):
+        return _err("provide both --example-input and --example-output")
+    if a.example_input:
+        a.statement += "\nExample input: " + a.example_input + "\nExpected output: " + a.example_output
+        a.criteria.append("The representative input produces the documented expected output")
 
     root = Path(a.root).resolve() if a.root else Path.cwd().resolve()
     target = plan_path(root)
@@ -307,90 +315,16 @@ def cmd_check(argv: list[str]) -> int:
         return _err('nothing to check:  roadmap check "<the approach you are about to take>"')
 
     root = Path(a.root).resolve() if a.root else project_root()
-    records = journal.load(root)
-    superseded = journal.superseded_ids(records)
-    # `doctor --accept X` writes a note carrying {"accepted": "X"}; the value is
-    # the id being promoted, not the note's own id.
-    accepted = {r["accepted"] for r in records if r.get("accepted")}
-
-    # Foreign records — captured from other authors' commit trailers — are
-    # NEVER part of the blocking set until explicitly accepted. BRIEF.md feeds
-    # an agent's context, so an unvetted trailer must not be able to veto a
-    # legitimate approach on somebody else's say-so.
-    def enforceable(r: dict) -> bool:
-        return (r.get("trust") != journal.TRUST_FOREIGN or r["id"] in accepted) \
-            and r["id"] not in superseded
-
-    rejections = [x for x in journal.rejections(records)
-                  if x["parent"] not in superseded
-                  and (x.get("trust") != journal.TRUST_FOREIGN or x["parent"] in accepted)]
-    constraints = [r for r in records if r["kind"] == "constraint" and enforceable(r)]
-
-    # Words that appear in most records — this project's own vocabulary —
-    # inflate every score and make every proposal look related to everything.
-    # They are only discoverable from the corpus, so drop them from the query
-    # before scoring anything.
-    corpus = [f"{x['alt']} {x.get('reason', '')}" for x in rejections] + \
-             [f"{r['text']} {r.get('why', '')}" for r in constraints]
-    ubiquitous = textmatch.corpus_stopwords(corpus)
-    approach = textmatch.strip_tokens(a.approach, ubiquitous) or a.approach
-
-    # The mirror of `ubiquitous`: terms this project names rarely. A
-    # constraint's one-word bans ("no networkx") are only enforceable for these,
-    # because a word used elsewhere is a category, not an artefact.
-    #
-    # And never a word the PLAN builds with. Corpus frequency cannot separate
-    # "networkx" from "branch" — in a sixty-record corpus both are rare — so
-    # C-dzha's "no branch, checkout, ..." blocked `bind a branch to a task, and
-    # explain the mapping`, which is this CLI's own shipped description of
-    # `roadmap map`. The plan's labels and intents say what we are building;
-    # nothing in them can be banned by a single word.
-    distinctive = textmatch.distinctive_terms(corpus)
-    plan = load_plan(root)
-    if plan is not None:
-        distinctive -= textmatch.vocabulary(
-            [plan.goal.label, plan.goal.statement or "", plan.goal.why]
-            + [f"{x.label} {x.intent or ''} {x.ships or ''} "
-               f"{x.exit_criteria or ''} {x.demo or ''}" for x in plan.phases]
-            + [f"{t.label} {t.intent or ''}" for t in plan.tasks])
-
-    rej_scored = textmatch.rank(
-        approach,
-        [(x["id"], x["alt"], f"{x.get('reason', '')} {x['parent_text']}") for x in rejections],
-    )
-    con_hits = {r["id"]: textmatch.constraint_score(approach, r["text"], r.get("why", ""),
-                                                    distinctive=distinctive)
-                for r in constraints}
-    con_scored = sorted(((k, v[0]) for k, v in con_hits.items()), key=lambda kv: -kv[1])
-    by_id = {x["id"]: x for x in rejections}
-    by_id.update({r["id"]: r for r in constraints})
-
-    top_rej = rej_scored[0] if rej_scored else None
-    top_con = con_scored[0] if con_scored else None
-
-    if top_rej and top_rej[1] >= textmatch.MATCH_FLOOR:
-        print(render.check_screen(a.approach, "REJECTED", by_id[top_rej[0]],
-                                  score=top_rej[1]))
-        return EXIT_REJECTED
-    if top_con and top_con[1] >= textmatch.MATCH_FLOOR:
-        print(render.check_screen(a.approach, "VIOLATES_CONSTRAINT", by_id[top_con[0]],
-                                  score=top_con[1], clause=con_hits[top_con[0]][1]))
-        return EXIT_CONSTRAINT
-
-    # Nothing is certain enough to block. Surface what is topically related
-    # anyway: blocking on near-certainty while SURFACING on overlap is what keeps
-    # the gate worth consulting. A bare "CLEAR" throws away the one thing the
-    # agent came here for.
-    full_text = {x["id"]: f"{x['alt']} {x.get('reason', '')} {x['parent_text']}"
-                 for x in rejections}
-    full_text.update({r["id"]: f"{r['text']} {r.get('why', '')}" for r in constraints})
-    related = [(by_id[k], sc) for k, sc in
-               sorted(rej_scored + con_scored, key=lambda kv: -kv[1])
-               if sc >= textmatch.RELATED_FLOOR
-               and textmatch.shared(approach, full_text[k]) >= textmatch.MIN_SHARED_TO_SURFACE
-               ][:3]
-    print(render.check_screen(a.approach, "CLEAR", None, related=related))
-    return EXIT_OK
+    from roadmapify.checking import check
+    import json
+    result = check(a.approach, journal.load(root), load_plan(root))
+    if a.json:
+        print(json.dumps(result, ensure_ascii=True, sort_keys=True))
+    else:
+        print(render.check_screen(a.approach, result["verdict"], result["hit"],
+                                  score=result["score"], clause=result["clause"],
+                                  related=result["related"]))
+    return result["exit_code"]
 
 
 # ── why ───────────────────────────────────────────────────────────────────────
@@ -407,7 +341,9 @@ def cmd_why(argv: list[str]) -> int:
     root = Path(a.root).resolve() if a.root else project_root()
     records = journal.load(root)
     rejections = journal.rejections(records)
-    superseded = journal.superseded_ids(records)
+    memory = journal.memory_state(records)
+    superseded = memory["superseded"]
+    records = [{**r, "trust": "accepted"} if r["id"] in memory["accepted"] else r for r in records]
 
     exact = [r for r in records if r["id"] == target]
     if exact:
@@ -429,7 +365,7 @@ def cmd_why(argv: list[str]) -> int:
                 if r.get("supersedes") in matched_ids and r["id"] not in matched_ids]
     matches.sort(key=lambda r: (r.get("ts", ""), r["id"]))
 
-    reversed_by = {r["supersedes"]: r["id"] for r in records if r.get("supersedes")}
+    reversed_by = {r["supersedes"]: r["id"] for r in records if r.get("supersedes") and r["id"] in memory["admitted"]}
     print(render.why_screen(target, matches, rejections, superseded,
                             reversed_by=reversed_by))
     return EXIT_OK
@@ -498,6 +434,8 @@ def cmd_resume(argv: list[str]) -> int:
         rec = journal.record("session_open", f"resumed from {target['id']}", ts=ts,
                              extra={"resumed_from": target["id"]})
         rec["id"] = journal.new_session_id(ts, rec["text"])
+        journal.append(journal.record("session_close", "resumed into " + rec["id"],
+                                     extra={"session": target["id"]}), root)
         journal.append(rec, root)
         new_id = rec["id"]
         refresh_brief(root)
@@ -509,6 +447,7 @@ def cmd_checkpoint(argv: list[str]) -> int:
     """Close the open session. ``--auto`` is the hook path: silent and never fails."""
     p = argparse.ArgumentParser(prog="roadmap checkpoint")
     p.add_argument("text", nargs="?", default="session ended")
+    p.add_argument("--session", default=os.environ.get("ROADMAP_SESSION"))
     p.add_argument("--auto", action="store_true", help="hook mode: quiet, always exit 0")
     p.add_argument("--root", default=None)
     a = p.parse_args(argv)
@@ -519,6 +458,12 @@ def cmd_checkpoint(argv: list[str]) -> int:
             if not a.auto:
                 print(render.dim("no open session to close."))
             return EXIT_OK
+        if a.session:
+            open_ = [s for s in open_ if s["id"] == a.session]
+            if not open_:
+                return EXIT_OK if a.auto else _err("no matching open session")
+        elif len(open_) > 1:
+            return EXIT_OK if a.auto else _err("multiple sessions; select --session ID")
         for s in open_:
             rec = journal.record("session_close", a.text, extra={"session": s["id"]})
             journal.append(rec, root)
@@ -560,6 +505,7 @@ def cmd_doctor(argv: list[str]) -> int:
         problems.append("no roadmap.toml — run `roadmap init \"<goal>\"`")
     else:
         problems += validate_plan(plan)
+        problems += [f"{x['id']}: {x['issue']} — {x['action']}" for x in templates.quality(plan)]
         for cyc in find_cycles(plan):
             problems.append("dependency cycle: " + " -> ".join(cyc))
         if not plan.goal.why:
@@ -572,7 +518,7 @@ def cmd_doctor(argv: list[str]) -> int:
     for r in records:
         if r.get("review_by") and r["review_by"] <= today:
             problems.append(f"{r['id']} was due for review on {r['review_by']}: {r['text'][:60]}")
-    foreign = [r for r in records if r.get("trust") == journal.TRUST_FOREIGN]
+    foreign = journal.memory_state(records)["informational"]
     if foreign:
         problems.append(f"{len(foreign)} record(s) captured from other authors' commit "
                         f"trailers are informational only — `roadmap doctor --accept <id>` "
@@ -866,10 +812,13 @@ def cmd_sync(argv: list[str]) -> int:
     proposals = {}
     if observed.ok:
         mine = gitsync.identity_email(observed.identity)
-        records = gitsync.records_from(observed, plan, mine=mine)
+        records = gitsync.records_from(observed, plan, mine=mine,
+                                       associations=gitsync.reviewed_associations(journal.load(root)))
         dropped = gitsync.dropped_ids(observed, plan)
         proposals = gitsync.proposals(observed, plan)
-        if not a.dry_run:
+        if a.dry_run:
+            added = gitsync.pending_records(root, records)
+        else:
             added = gitsync.append_new(root, records)
             refresh_brief(root)
     print(render.sync_screen(observed, records, added, dropped=dropped,
@@ -886,6 +835,7 @@ def cmd_verify(argv: list[str]) -> int:
                    help="only tasks evidence says are done")
     p.add_argument("--json", action="store_true",
                    help="the whole report on stdout, machine-readable")
+    p.add_argument("--code-graph", help="existing graphify JSON file")
     p.add_argument("--root", default=None)
     a = p.parse_args(argv)
 
@@ -900,7 +850,12 @@ def cmd_verify(argv: list[str]) -> int:
     if a.phase and plan.phase(a.phase) is None:
         return _err(f"no phase {a.phase!r} in this plan.")
 
-    report = verify.verify(plan, snap, root, task=a.task or "",
+    from roadmapify import bridge
+    try:
+        code_graph = bridge.load(a.code_graph) if a.code_graph else None
+    except (OSError, ValueError) as exc:
+        return _err(str(exc))
+    report = verify.verify(plan, snap, root, code_graph=code_graph, task=a.task or "",
                            phase=a.phase or "", claimed_only=a.claimed_only)
     now = _now()
     # No refresh_brief. Four shipped cmd_ bodies call it, so anyone starting
@@ -991,6 +946,141 @@ NOT_YET = {
 }
 
 
+def cmd_context(argv):
+    p = argparse.ArgumentParser(prog="roadmap context")
+    p.add_argument("task", nargs="?", default="")
+    p.add_argument("--root")
+    p.add_argument("--code-graph")
+    p.add_argument("--source-root", default="")
+    p.add_argument("--json", action="store_true")
+    a = p.parse_args(argv)
+    from roadmapify import workflow, bridge
+    import json
+    try:
+        result = workflow.context(Path(a.root).resolve() if a.root else project_root(), a.task,
+                                  now=_now(), code_graph=bridge.load(a.code_graph) if a.code_graph else None,
+                                  source_root=a.source_root)
+        print(json.dumps(result, indent=2, ensure_ascii=True))
+        return EXIT_OK
+    except (ValueError, OSError) as exc:
+        return _err(str(exc))
+
+
+def cmd_impact(argv):
+    p = argparse.ArgumentParser(prog="roadmap impact")
+    p.add_argument("node")
+    p.add_argument("--root")
+    p.add_argument("--json", action="store_true")
+    a = p.parse_args(argv)
+    from roadmapify.workflow import impact
+    import json
+    try:
+        print(json.dumps(impact(Path(a.root).resolve() if a.root else project_root(), a.node), indent=2))
+        return EXIT_OK
+    except (ValueError, OSError) as exc:
+        return _err(str(exc))
+
+
+def cmd_onboard(argv):
+    p = argparse.ArgumentParser(prog="roadmap onboard")
+    p.add_argument("--root")
+    p.add_argument("--accept", default="")
+    p.add_argument("--task", default="")
+    p.add_argument("--why", default="")
+    a = p.parse_args(argv)
+    from roadmapify.workflow import onboarding
+    import json
+    try:
+        root = Path(a.root).resolve() if a.root else project_root()
+        print(json.dumps(onboarding(root, accept=a.accept, task_id=a.task, why=a.why), indent=2))
+        if a.accept:
+            refresh_brief(root)
+        return EXIT_OK
+    except (ValueError, OSError) as exc:
+        return _err(str(exc))
+
+
+def cmd_goal(argv):
+    import json
+    from roadmapify import execution
+    p = argparse.ArgumentParser(prog="roadmap goal")
+    p.add_argument("action", choices=["start", "status", "tick", "claim", "check", "finish", "pause", "resume", "cancel", "accept"])
+    p.add_argument("--root")
+    p.add_argument("--steps", type=int)
+    p.add_argument("--minutes", type=int)
+    p.add_argument("--task", action="append", default=[])
+    p.add_argument("--worker", default="")
+    p.add_argument("--step", default="")
+    p.add_argument("--approach", default="")
+    p.add_argument("--result", help="JSON result path, or - for stdin")
+    p.add_argument("--criterion", type=int)
+    p.add_argument("--reason", default="")
+    a = p.parse_args(argv)
+    root = Path(a.root).resolve() if a.root else project_root()
+    try:
+        if a.action == "start":
+            result = execution.start(root, now=_now(), max_steps=a.steps if a.steps is not None else 3,
+                                     minutes=a.minutes if a.minutes is not None else 20, scope=a.task)
+        elif a.action == "status":
+            result = execution.read(root) or {"state": "idle", "reason": "no goal run"}
+        elif a.action == "tick":
+            result = execution.tick(root, now=_now())
+        elif a.action == "claim":
+            result = execution.claim(root, a.worker, now=_now())
+        elif a.action == "check":
+            result = execution.check_approach(root, a.worker, a.step, a.approach, now=_now())
+        elif a.action == "finish":
+            if not a.result:
+                raise ValueError("--result JSON_PATH or --result - is required")
+            if a.result == "-":
+                raw = sys.stdin.read(500_001)
+            else:
+                with open(a.result) as stream:
+                    raw = stream.read(500_001)
+            if len(raw) > 500_000:
+                raise ValueError("result exceeds 500 KB")
+            result = execution.finish(root, a.worker, a.step, json.loads(raw), now=_now())
+        elif a.action in ("pause", "cancel"):
+            result = execution.request(root, a.action, now=_now())
+        elif a.action == "resume":
+            result = execution.resume(root, now=_now(), minutes=a.minutes, max_steps=a.steps)
+        else:
+            result = execution.accept(root, a.criterion, a.reason, now=_now())
+        print(json.dumps(result, indent=2, ensure_ascii=True))
+        return result.get("exit_code", EXIT_OK)
+    except (OSError, ValueError, LockBusy) as exc:
+        return _err(str(exc))
+
+
+def cmd_workspace(argv):
+    from roadmapify import workspace, bridge
+    p = argparse.ArgumentParser(prog="roadmap workspace")
+    p.add_argument("--root")
+    p.add_argument("--out")
+    p.add_argument("--code-graph")
+    p.add_argument("--serve", action="store_true")
+    p.add_argument("--port", type=int, default=0)
+    a = p.parse_args(argv)
+    root = Path(a.root).resolve() if a.root else project_root()
+    try:
+        graph = bridge.load(a.code_graph) if a.code_graph else None
+        if not a.serve:
+            print(workspace.export(root, now=_now(), output=a.out, code_graph=graph))
+            return EXIT_OK
+        server, url = workspace.serve(root, port=a.port, code_graph=graph)
+        print(url, flush=True)
+        print("Local goal workspace. Agent hosts claim work with roadmap goal claim.", flush=True)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
+        return EXIT_OK
+    except (OSError, ValueError) as exc:
+        return _err(str(exc))
+
+
 def cmd_not_yet(name: str):
     def run(argv: list[str]) -> int:
         phase, what = NOT_YET[name]
@@ -1011,6 +1101,11 @@ def cmd_not_yet(name: str):
 # ── dispatch ──────────────────────────────────────────────────────────────────
 
 COMMANDS = {
+    "workspace": cmd_workspace,
+    "goal": cmd_goal,
+    "context": cmd_context,
+    "impact": cmd_impact,
+    "onboard": cmd_onboard,
     "init": cmd_init,
     "note": cmd_note,
     "check": cmd_check,
@@ -1046,6 +1141,7 @@ for _name in NOT_YET:
 HELP = """roadmap - a phased build plan with memory that survives context loss
 
   roadmap init "<goal>" [--why "..."] [--archetype auto|generic|cli]
+                        [--example-input TEXT --example-output TEXT] [--criteria TEXT]
                         write roadmap.toml with the complete phased path
   roadmap note "<text>" [--kind decision|constraint|risk|note|question]
                         [--rejected "<alt>: <why not>"] [--why ...] [--about T-07]
@@ -1091,6 +1187,23 @@ HELP = """roadmap - a phased build plan with memory that survives context loss
                         always-on block into CLAUDE.md / AGENTS.md; optional skill
   roadmap export [html] [--out PATH]
                         one self-contained page: the path, and the memory
+
+  roadmap workspace [--serve --port PORT] [--out PATH] [--code-graph PATH]
+                        visual goal, dependency, decision and code diagrams
+  roadmap goal start [--steps 3 --minutes 20 --task T-ID]
+                        publish bounded work for a local agent host
+  roadmap goal status|tick|pause|resume|cancel
+                        inspect or control a persistent run; host must acknowledge stops
+  roadmap goal claim|check|finish --worker ID [--step ID]
+                        host protocol: claim packet, check approach, report observations
+  roadmap goal accept --criterion INDEX --reason TEXT
+                        record explicit human acceptance of a goal criterion
+  roadmap context [T-ID] [--code-graph PATH] [--source-root PATH]
+                        goal, decisions, blockers, evidence and next action as JSON
+  roadmap impact <node>
+                        affected tasks and decisions from the plan graph
+  roadmap onboard [--accept FULL_SHA --task T-ID --why REASON]
+                        review historical commit associations before admitting them
 
 Every command takes --root to work on another directory.
 Env: ROADMAP_OUT (output dir) · ROADMAP_NO_SESSION=1 (never write session records)

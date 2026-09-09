@@ -1,0 +1,11 @@
+{
+  "fixture": "Synthetic import fixture, not an extracted code graph",
+  "nodes": [
+    {"id": "fixture_writer", "label": "Fixture: writer", "file_type": "code", "source_file": "roadmapify/paths.py", "source_location": "L111"},
+    {"id": "fixture_append", "label": "Fixture: append", "file_type": "code", "source_file": "roadmapify/paths.py", "source_location": "L135"},
+    {"id": "fixture_other", "label": "Fixture: same basename elsewhere", "file_type": "code", "source_file": "unrelated/paths.py"}
+  ],
+  "edges": [
+    {"source": "fixture_writer", "target": "fixture_append", "relation": "references", "confidence": "INFERRED", "confidence_score": 0.75}
+  ]
+}
